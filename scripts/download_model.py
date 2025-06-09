@@ -20,6 +20,32 @@ def get_account_id():
         logger.error(f"Error obteniendo Account ID: {str(e)}")
         return None
 
+def find_model_path(container):
+    """Encontrar la ruta del modelo en el contenedor"""
+    try:
+        # Buscar archivos .onnx
+        exec_result = container.exec_run('find / -name "*.onnx" 2>/dev/null')
+        paths = exec_result.output.decode().strip().split('\n')
+        
+        # Filtrar rutas válidas
+        valid_paths = [p for p in paths if p and 'densenet' in p.lower()]
+        
+        if valid_paths:
+            logger.info(f"Modelo encontrado en: {valid_paths[0]}")
+            return valid_paths[0]
+        
+        # Si no encontramos el archivo, listar directorios comunes
+        common_dirs = ['/model', '/models', '/app', '/opt', '/usr/local']
+        for dir in common_dirs:
+            exec_result = container.exec_run(f'ls -la {dir}')
+            logger.info(f"Contenido de {dir}:")
+            logger.info(exec_result.output.decode())
+        
+        raise Exception("No se encontró el archivo del modelo")
+    except Exception as e:
+        logger.error(f"Error buscando modelo: {str(e)}")
+        raise
+
 def download_model_from_ecr():
     """Descargar modelo desde ECR"""
     try:
@@ -81,11 +107,19 @@ def download_model_from_ecr():
         try:
             # Crear contenedor temporal
             logger.info("Creando contenedor temporal")
-            container = docker_client.containers.create(model_uri)
+            container = docker_client.containers.create(
+                model_uri,
+                command='sleep 1000',  # Mantener el contenedor vivo
+                tty=True
+            )
+            container.start()
+            
+            # Encontrar la ruta del modelo
+            model_path = find_model_path(container)
             
             # Extraer modelo
-            logger.info("Extrayendo modelo del contenedor")
-            bits, _ = container.get_archive('/model/densenet121_Opset17.onnx')
+            logger.info(f"Extrayendo modelo desde: {model_path}")
+            bits, _ = container.get_archive(model_path)
             
             # Guardar temporalmente
             with tempfile.NamedTemporaryFile() as tmp:
@@ -95,17 +129,25 @@ def download_model_from_ecr():
                 
                 # Extraer archivo
                 with tarfile.open(tmp.name) as tar:
-                    tar.extractall('/tmp')
-            
-            logger.info("Modelo extraído exitosamente a /tmp/densenet121_Opset17.onnx")
+                    # Obtener el nombre del archivo dentro del tar
+                    members = tar.getmembers()
+                    if not members:
+                        raise Exception("Archivo tar vacío")
+                    
+                    # Renombrar el archivo al extraer
+                    member = members[0]
+                    member.name = "densenet121_Opset17.onnx"
+                    
+                    # Extraer a /tmp
+                    tar.extract(member, "/tmp")
             
             # Verificar que el archivo existe y tiene tamaño
-            model_path = '/tmp/densenet121_Opset17.onnx'
-            if not os.path.exists(model_path):
-                raise Exception(f"El archivo {model_path} no existe después de la extracción")
+            output_path = '/tmp/densenet121_Opset17.onnx'
+            if not os.path.exists(output_path):
+                raise Exception(f"El archivo {output_path} no existe después de la extracción")
             
-            size = os.path.getsize(model_path)
-            logger.info(f"Tamaño del modelo: {size/1024/1024:.2f} MB")
+            size = os.path.getsize(output_path)
+            logger.info(f"Modelo extraído exitosamente a {output_path} ({size/1024/1024:.2f} MB)")
             
             return True
             
@@ -116,6 +158,7 @@ def download_model_from_ecr():
         finally:
             # Limpiar
             try:
+                container.stop()
                 container.remove()
                 logger.info("Contenedor temporal eliminado")
             except Exception as e:

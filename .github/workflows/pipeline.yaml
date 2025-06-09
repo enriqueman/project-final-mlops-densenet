@@ -119,6 +119,15 @@ jobs:
           
           # Verify Docker installation
           docker --version
+
+      - name: Inspect model image
+        env:
+          AWS_REGION: ${{ env.TESTING_REGION }}
+          STAGE: ${{ env.STAGE }}
+          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+        run: |
+          echo "Inspeccionando imagen del modelo..."
+          python scripts/inspect_model_image.py
           
       - name: Download model from ECR
         env:
