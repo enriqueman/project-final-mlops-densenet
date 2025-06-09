@@ -8,6 +8,8 @@ import pytest
 import requests
 from io import BytesIO
 import base64
+import time
+import botocore
 
 # Configuración
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
@@ -19,11 +21,35 @@ METRICS_THRESHOLD = {
     'avg_confidence': 0.70
 }
 
+def wait_for_bucket(bucket_name, max_attempts=10, delay=5):
+    """Esperar a que el bucket esté disponible"""
+    s3 = boto3.client('s3', region_name=AWS_REGION)
+    for attempt in range(max_attempts):
+        try:
+            s3.head_bucket(Bucket=bucket_name)
+            return True
+        except botocore.exceptions.ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code')
+            if error_code == '404':
+                print(f"Bucket {bucket_name} no existe aún, esperando... (intento {attempt + 1}/{max_attempts})")
+                time.sleep(delay)
+            else:
+                raise
+    return False
+
 def download_test_data():
     """Descargar datos de prueba desde S3"""
+    # Esperar a que el bucket esté disponible
+    if not wait_for_bucket(MODEL_BUCKET):
+        raise Exception(f"El bucket {MODEL_BUCKET} no está disponible después de esperar")
+    
     s3 = boto3.client('s3', region_name=AWS_REGION)
-    response = s3.get_object(Bucket=MODEL_BUCKET, Key=MODEL_KEY)
-    return json.loads(response['Body'].read().decode('utf-8'))
+    try:
+        response = s3.get_object(Bucket=MODEL_BUCKET, Key=MODEL_KEY)
+        return json.loads(response['Body'].read().decode('utf-8'))
+    except Exception as e:
+        print(f"Error descargando datos de prueba: {str(e)}")
+        raise
 
 def preprocess_image(image_bytes):
     """Preprocesar imagen para DenseNet121"""
@@ -62,6 +88,8 @@ def test_model_response():
     
     # Cargar modelo
     model_path = "/tmp/densenet121_Opset17.onnx"
+    assert os.path.exists(model_path), "El modelo no existe en /tmp/densenet121_Opset17.onnx"
+    
     session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
     
     # Obtener nombres de entrada/salida
@@ -84,6 +112,8 @@ def test_model_metrics():
     
     # Cargar modelo
     model_path = "/tmp/densenet121_Opset17.onnx"
+    assert os.path.exists(model_path), "El modelo no existe en /tmp/densenet121_Opset17.onnx"
+    
     session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
     
     # Obtener nombres de entrada/salida

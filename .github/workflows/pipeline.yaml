@@ -29,7 +29,37 @@ env:
   STAGE: ${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
 
 jobs:
+  deploy-test-infrastructure:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.TESTING_REGION }}
+          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
+          role-session-name: testing-deployment
+          role-duration-seconds: 3600
+          role-skip-session-tagging: true
+
+      - name: Deploy test infrastructure
+        run: |
+          sam deploy \
+            --stack-name test-resources-${{ env.STAGE }} \
+            --template-file template.yaml \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides Stage=${{ env.STAGE }} \
+            --no-fail-on-empty-changeset
+
   test:
+    needs: [deploy-test-infrastructure]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -57,14 +87,23 @@ jobs:
           role-skip-session-tagging: true
 
       - name: Generate and upload test data
+        env:
+          AWS_REGION: ${{ env.TESTING_REGION }}
+          STAGE: ${{ env.STAGE }}
         run: |
           python scripts/generate_test_data.py
           
       - name: Download model from ECR
+        env:
+          AWS_REGION: ${{ env.TESTING_REGION }}
+          STAGE: ${{ env.STAGE }}
         run: |
           python scripts/download_model.py
           
       - name: Run tests
+        env:
+          AWS_REGION: ${{ env.TESTING_REGION }}
+          STAGE: ${{ env.STAGE }}
         run: |
           pytest tests/test_model.py -v
 
