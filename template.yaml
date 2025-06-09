@@ -52,7 +52,7 @@ Resources:
     Properties:
       FunctionName: !Sub 'densenet121-inference-${Stage}'
       PackageType: Image
-      ImageUri: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${DenseNetECRRepository}:latest'
+      ImageUri: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/densenet121-model-${Stage}:latest'
       Architectures:
         - x86_64
       Timeout: 180

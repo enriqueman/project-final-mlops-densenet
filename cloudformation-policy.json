@@ -1,0 +1,155 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "cloudformation:CreateStack",
+                "cloudformation:DeleteStack",
+                "cloudformation:DescribeStacks",
+                "cloudformation:UpdateStack",
+                "cloudformation:CreateChangeSet",
+                "cloudformation:DeleteChangeSet",
+                "cloudformation:DescribeChangeSet",
+                "cloudformation:ExecuteChangeSet",
+                "cloudformation:SetStackPolicy",
+                "cloudformation:ValidateTemplate",
+                "cloudformation:GetTemplateSummary",
+                "cloudformation:ListStacks",
+                "cloudformation:ListStackResources",
+                "cloudformation:DescribeStackResource",
+                "cloudformation:DescribeStackResources"
+            ],
+            "Resource": [
+                "arn:aws:cloudformation:us-east-1:471112837636:stack/test-resources-*/*",
+                "arn:aws:cloudformation:us-east-1:471112837636:stack/densenet-lambda-*/*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "iam:GetRole",
+                "iam:CreateRole",
+                "iam:DeleteRole",
+                "iam:PutRolePolicy",
+                "iam:DeleteRolePolicy",
+                "iam:AttachRolePolicy",
+                "iam:DetachRolePolicy",
+                "iam:PassRole",
+                "iam:TagRole",
+                "iam:UntagRole",
+                "iam:ListRoleTags"
+            ],
+            "Resource": [
+                "arn:aws:iam::471112837636:role/*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "lambda:CreateFunction",
+                "lambda:DeleteFunction",
+                "lambda:GetFunction",
+                "lambda:GetFunctionConfiguration",
+                "lambda:UpdateFunctionCode",
+                "lambda:UpdateFunctionConfiguration",
+                "lambda:AddPermission",
+                "lambda:RemovePermission",
+                "lambda:TagResource",
+                "lambda:UntagResource",
+                "lambda:ListTags"
+            ],
+            "Resource": [
+                "arn:aws:lambda:us-east-1:471112837636:function:*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "apigateway:GET",
+                "apigateway:POST",
+                "apigateway:PUT",
+                "apigateway:DELETE",
+                "apigateway:PATCH"
+            ],
+            "Resource": [
+                "arn:aws:apigateway:us-east-1::/restapis/*",
+                "arn:aws:apigateway:us-east-1::/apis/*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage",
+                "ecr:PutImage",
+                "ecr:InitiateLayerUpload",
+                "ecr:UploadLayerPart",
+                "ecr:CompleteLayerUpload",
+                "ecr:CreateRepository",
+                "ecr:DeleteRepository",
+                "ecr:SetRepositoryPolicy",
+                "ecr:GetRepositoryPolicy",
+                "ecr:TagResource",
+                "ecr:DescribeRepositories",
+                "ecr:ListImages",
+                "ecr:PutLifecyclePolicy",
+                "ecr:GetLifecyclePolicy",
+                "ecr:DeleteLifecyclePolicy"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+                "logs:DescribeLogGroups",
+                "logs:DescribeLogStreams",
+                "logs:DeleteLogGroup",
+                "logs:DeleteLogStream",
+                "logs:PutRetentionPolicy",
+                "logs:GetLogEvents",
+                "logs:TagResource",
+                "logs:UntagResource"
+            ],
+            "Resource": [
+                "arn:aws:logs:us-east-1:471112837636:log-group:/aws/lambda/*",
+                "arn:aws:logs:us-east-1:471112837636:log-group:/aws/lambda/*:*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:CreateBucket",
+                "s3:DeleteBucket",
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+                "s3:PutBucketPolicy",
+                "s3:GetBucketPolicy",
+                "s3:DeleteBucketPolicy",
+                "s3:PutBucketVersioning",
+                "s3:GetBucketVersioning",
+                "s3:PutLifecycleConfiguration",
+                "s3:GetLifecycleConfiguration",
+                "s3:PutBucketPublicAccessBlock",
+                "s3:GetBucketPublicAccessBlock",
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:DeleteObject",
+                "s3:ListBucketVersions",
+                "s3:PutBucketTagging",
+                "s3:GetBucketTagging"
+            ],
+            "Resource": [
+                "arn:aws:s3:::densenet-test-data-*",
+                "arn:aws:s3:::densenet-test-data-*/*",
+                "arn:aws:s3:::aws-sam-cli-managed-*",
+                "arn:aws:s3:::aws-sam-cli-managed-*/*"
+            ]
+        }
+    ]
+} 
