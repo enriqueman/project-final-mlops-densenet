@@ -10,6 +10,7 @@ from io import BytesIO
 import base64
 import time
 import botocore
+import logging
 
 # Configuración
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
@@ -20,6 +21,8 @@ METRICS_THRESHOLD = {
     'accuracy': 0.85,
     'avg_confidence': 0.70
 }
+
+logger = logging.getLogger(__name__)
 
 def wait_for_bucket(bucket_name, max_attempts=10, delay=5):
     """Esperar a que el bucket esté disponible"""
@@ -63,14 +66,17 @@ def preprocess_image(image_bytes):
     image = image.resize((224, 224))
     
     # Normalizar
-    img_array = np.array(image).astype(np.float32)
-    mean = np.array([0.485, 0.456, 0.406]) * 255.0
-    std = np.array([0.229, 0.224, 0.225]) * 255.0
+    img_array = np.array(image).astype(np.float32)  # Asegurar float32
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32) * 255.0  # Asegurar float32
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32) * 255.0   # Asegurar float32
     img_array = (img_array - mean) / std
     
     # Cambiar formato HWC → CHW y agregar batch
     img_array = np.transpose(img_array, (2, 0, 1))
     img_array = np.expand_dims(img_array, axis=0)
+    
+    # Verificar tipo de datos
+    assert img_array.dtype == np.float32, f"Array debe ser float32, pero es {img_array.dtype}"
     
     return img_array
 
@@ -86,14 +92,23 @@ def test_model_response():
     # Preprocesar imagen
     input_data = preprocess_image(image_bytes)
     
+    # Verificar tipo de datos
+    logger.info(f"Tipo de datos de entrada: {input_data.dtype}")
+    logger.info(f"Forma de datos de entrada: {input_data.shape}")
+    
     # Cargar modelo
     model_path = "/tmp/densenet121_Opset17.onnx"
     assert os.path.exists(model_path), "El modelo no existe en /tmp/densenet121_Opset17.onnx"
     
+    # Cargar modelo y verificar metadatos
     session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+    input_meta = session.get_inputs()[0]
+    logger.info(f"Nombre de entrada del modelo: {input_meta.name}")
+    logger.info(f"Tipo de datos esperado: {input_meta.type}")
+    logger.info(f"Forma esperada: {input_meta.shape}")
     
     # Obtener nombres de entrada/salida
-    input_name = session.get_inputs()[0].name
+    input_name = input_meta.name
     output_name = session.get_outputs()[0].name
     
     # Ejecutar inferencia
@@ -115,9 +130,10 @@ def test_model_metrics():
     assert os.path.exists(model_path), "El modelo no existe en /tmp/densenet121_Opset17.onnx"
     
     session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+    input_meta = session.get_inputs()[0]
     
     # Obtener nombres de entrada/salida
-    input_name = session.get_inputs()[0].name
+    input_name = input_meta.name
     output_name = session.get_outputs()[0].name
     
     correct_predictions = 0
@@ -128,6 +144,9 @@ def test_model_metrics():
         # Preprocesar imagen
         image_bytes = base64.b64decode(test_case['image'])
         input_data = preprocess_image(image_bytes)
+        
+        # Verificar tipo de datos
+        assert input_data.dtype == np.float32, f"Datos de entrada deben ser float32, pero son {input_data.dtype}"
         
         # Ejecutar inferencia
         outputs = session.run([output_name], {input_name: input_data})
