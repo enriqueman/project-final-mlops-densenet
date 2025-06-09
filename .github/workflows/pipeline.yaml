@@ -1,0 +1,142 @@
+name: Pipeline
+
+on:
+  push:
+    branches:
+      - 'prod'
+      - 'dev'
+  delete:
+    branches:
+      - 'feature**'
+
+env:
+  PIPELINE_USER_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  PIPELINE_USER_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  SAM_TEMPLATE: template.yaml
+  TESTING_STACK_NAME: densenet-lambda-dev
+  TESTING_PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie
+  TESTING_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-perso-CloudFormationExecutionRo-LVTGVTJzrPve
+  TESTING_ARTIFACTS_BUCKET: 
+  TESTING_IMAGE_REPOSITORY: 471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-dev-pipeline-resources-imagerepository-kzgat478cs9h
+  TESTING_REGION: us-east-1
+  PROD_STACK_NAME: densenet-lambda-prod
+  PROD_PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:user/aws-sam-cli-managed-personal-account-d-PipelineUser-0c4EBLF4Lx9H
+  PROD_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie
+  PROD_ARTIFACTS_BUCKET: aws-sam-cli-managed-perso-CloudFormationExecutionRo-LVTGVTJzrPve
+  PROD_IMAGE_REPOSITORY: 471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-prod-pipeline-resources-imagerepository-jxjisqblyq2w
+  PROD_REGION: us-east-1
+  TEST_DATA_BUCKET: densenet-test-data-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
+  STAGE: ${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
+
+jobs:
+  test:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/requirements-test.txt
+          
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.TESTING_REGION }}
+          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
+          role-session-name: testing-session
+          role-duration-seconds: 3600
+          role-skip-session-tagging: true
+
+      - name: Generate and upload test data
+        run: |
+          python scripts/generate_test_data.py
+          
+      - name: Download model from ECR
+        run: |
+          python scripts/download_model.py
+          
+      - name: Run tests
+        run: |
+          pytest tests/test_model.py -v
+
+  build-and-deploy-dev:
+    if: github.ref == 'refs/heads/dev'
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+          
+      - name: Build with SAM
+        run: sam build --template ${SAM_TEMPLATE} --use-container
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.TESTING_REGION }}
+          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
+          role-session-name: dev-deployment
+          role-duration-seconds: 3600
+          role-skip-session-tagging: true
+
+      - name: Deploy to dev
+        run: |
+          sam deploy \
+            --stack-name ${TESTING_STACK_NAME} \
+            --capabilities CAPABILITY_IAM \
+            --region ${TESTING_REGION} \
+            --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
+            --image-repository ${TESTING_IMAGE_REPOSITORY} \
+            --no-fail-on-empty-changeset \
+            --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE} \
+            --parameter-overrides Stage=dev
+
+  build-and-deploy-prod:
+    if: github.ref == 'refs/heads/prod'
+    needs: [test]
+    runs-on: ubuntu-latest
+    environment: production  # Requiere aprobación manual
+    steps:
+      - uses: actions/checkout@v3
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+          
+      - name: Build with SAM
+        run: sam build --template ${SAM_TEMPLATE} --use-container
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.PROD_REGION }}
+          role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
+          role-session-name: prod-deployment
+          role-duration-seconds: 3600
+          role-skip-session-tagging: true
+
+      - name: Deploy to production
+        run: |
+          sam deploy \
+            --stack-name ${PROD_STACK_NAME} \
+            --capabilities CAPABILITY_IAM \
+            --region ${PROD_REGION} \
+            --s3-bucket ${PROD_ARTIFACTS_BUCKET} \
+            --image-repository ${PROD_IMAGE_REPOSITORY} \
+            --no-fail-on-empty-changeset \
+            --role-arn ${PROD_CLOUDFORMATION_EXECUTION_ROLE} \
+            --parameter-overrides Stage=prod

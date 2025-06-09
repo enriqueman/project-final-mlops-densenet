@@ -1,0 +1,252 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'DenseNet121 ONNX Inference API with FastAPI'
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 3008
+    Environment:
+      Variables:
+        OMP_NUM_THREADS: 1
+        ONNX_DISABLE_OPTIMIZATION: 0
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment stage
+
+Resources:
+  # ECR Repository para la aplicación Lambda
+  DenseNetECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'densenet121-lambda-${Stage}'
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  # Lambda Function con IMAGE
+  DenseNetInferenceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'densenet121-inference-${Stage}'
+      PackageType: Image
+      ImageUri: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${DenseNetECRRepository}:latest'
+      Architectures:
+        - x86_64
+      Timeout: 180
+      Environment:
+        Variables:
+          APP_STAGE: !Ref Stage
+          APP_LOG_LEVEL: INFO
+          APP_REGION: !Ref 'AWS::Region'
+          APP_ACCOUNT_ID: !Ref 'AWS::AccountId'
+          MODEL_ECR_REPOSITORY: !Sub 'densenet121-model-${Stage}'
+      Events:
+        # API Gateway para todos los endpoints
+        ApiRoot:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DenseNetApi
+            Path: /
+            Method: ANY
+        ApiProxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DenseNetApi
+            Path: /{proxy+}
+            Method: ANY
+      # Políticas IAM
+      Policies:
+        - CloudWatchLogsFullAccess
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+            - Effect: Allow
+              Action:
+                - ecr:GetAuthorizationToken
+                - ecr:BatchCheckLayerAvailability
+                - ecr:GetDownloadUrlForLayer
+                - ecr:BatchGetImage
+                - ecr:DescribeRepositories
+                - ecr:ListImages
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - sts:GetCallerIdentity
+              Resource: '*'
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:ListBucket
+              Resource:
+                - !GetAtt TestDataBucket.Arn
+                - !Sub '${TestDataBucket.Arn}/*'
+
+  # API Gateway
+  DenseNetApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub 'densenet121-api-${Stage}'
+      StageName: !Ref Stage
+      EndpointConfiguration:
+        Type: REGIONAL
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+        MaxAge: "'600'"
+      # Configuración correcta de throttling usando MethodSettings
+      MethodSettings:
+        - ResourcePath: "/*" # Aplica a todos los recursos
+          HttpMethod: "*"    # Aplica a todos los métodos
+          ThrottlingRateLimit: 100
+          ThrottlingBurstLimit: 200
+      # Request/Response templates
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseTemplates:
+            application/json: '{"message": $context.error.messageString, "type": "client_error"}'
+        DEFAULT_5XX:
+          ResponseTemplates:
+            application/json: '{"message": $context.error.messageString, "type": "server_error"}'
+
+  # CloudWatch Log Group
+  DenseNetLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/densenet121-inference-${Stage}'
+      RetentionInDays: 7
+
+  # CloudWatch Alarms
+  DenseNetErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'densenet121-errors-${Stage}'
+      AlarmDescription: 'High error rate for DenseNet inference'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DenseNetInferenceFunction
+
+  DenseNetLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'densenet121-latency-${Stage}'
+      AlarmDescription: 'High latency for DenseNet inference'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10000  # 10 segundos
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DenseNetInferenceFunction
+
+  # Bucket S3 para datos de prueba
+  TestDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'densenet-test-data-${Stage}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Política para el bucket de datos de prueba
+  TestDataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TestDataBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowLambdaAccess
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt DenseNetInferenceFunction.Arn
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt TestDataBucket.Arn
+              - !Sub '${TestDataBucket.Arn}/*'
+
+Outputs:
+  DenseNetApiUrl:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${DenseNetApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiUrl'
+
+  DenseNetFunctionName:
+    Description: 'Lambda Function Name'
+    Value: !Ref DenseNetInferenceFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-FunctionName'
+
+  ECRRepositoryUri:
+    Description: 'ECR Repository URI for Lambda'
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${DenseNetECRRepository}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ECRUri'
+
+  HealthCheckUrl:
+    Description: 'Health check endpoint'
+    Value: !Sub 'https://${DenseNetApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/health'
+
+  SwaggerDocsUrl:
+    Description: 'API Documentation (FastAPI Swagger)'
+    Value: !Sub 'https://${DenseNetApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/docs'
+
+  # Output para referencia del repositorio del modelo (creado manualmente)
+  ModelECRRepositoryName:
+    Description: 'Model ECR Repository Name (created manually)'
+    Value: !Sub 'densenet121-model-${Stage}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ModelECRRepoName'
