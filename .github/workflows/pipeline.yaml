@@ -29,37 +29,7 @@ env:
   STAGE: ${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
 
 jobs:
-  deploy-test-infrastructure:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.TESTING_REGION }}
-          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: testing-deployment
-          role-duration-seconds: 3600
-          role-skip-session-tagging: true
-
-      - name: Deploy test infrastructure
-        run: |
-          sam deploy \
-            --stack-name test-resources-${{ env.STAGE }} \
-            --template-file template.yaml \
-            --capabilities CAPABILITY_IAM \
-            --parameter-overrides Stage=${{ env.STAGE }} \
-            --no-fail-on-empty-changeset
-
   test:
-    needs: [deploy-test-infrastructure]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -74,6 +44,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r tests/requirements-test.txt
+          pip install docker
           
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -86,10 +57,37 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
+      - name: Setup test data bucket
+        run: |
+          # Ejecutar script de configuración del bucket
+          python -c "
+          import boto3
+          import time
+          s3 = boto3.client('s3')
+          bucket_name = '${{ env.TEST_DATA_BUCKET }}'
+          
+          # Verificar si el bucket existe
+          try:
+              s3.head_bucket(Bucket=bucket_name)
+              print(f'Bucket {bucket_name} ya existe')
+          except:
+              if '${{ env.TESTING_REGION }}' == 'us-east-1':
+                  s3.create_bucket(Bucket=bucket_name)
+              else:
+                  s3.create_bucket(
+                      Bucket=bucket_name,
+                      CreateBucketConfiguration={'LocationConstraint': '${{ env.TESTING_REGION }}'}
+                  )
+              print(f'Bucket {bucket_name} creado')
+              # Esperar a que el bucket esté disponible
+              time.sleep(5)
+          "
+
       - name: Generate and upload test data
         env:
           AWS_REGION: ${{ env.TESTING_REGION }}
           STAGE: ${{ env.STAGE }}
+          TEST_DATA_BUCKET: ${{ env.TEST_DATA_BUCKET }}
         run: |
           python scripts/generate_test_data.py
           
@@ -97,6 +95,7 @@ jobs:
         env:
           AWS_REGION: ${{ env.TESTING_REGION }}
           STAGE: ${{ env.STAGE }}
+          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
         run: |
           python scripts/download_model.py
           
@@ -104,6 +103,7 @@ jobs:
         env:
           AWS_REGION: ${{ env.TESTING_REGION }}
           STAGE: ${{ env.STAGE }}
+          TEST_DATA_BUCKET: ${{ env.TEST_DATA_BUCKET }}
         run: |
           pytest tests/test_model.py -v
 
@@ -113,13 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-          
-      - name: Build with SAM
-        run: sam build --template ${SAM_TEMPLATE} --use-container
-
+      
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -131,10 +125,33 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
+      - name: Download model from bucket
+        run: |
+          aws s3 cp s3://${TEST_DATA_BUCKET}/models/densenet121_Opset17.onnx densenet_function/
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Lambda image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ env.TESTING_IMAGE_REPOSITORY }}
+          IMAGE_TAG: latest
+        run: |
+          cd densenet_function
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REPOSITORY:$IMAGE_TAG
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
       - name: Deploy to dev
         run: |
           sam deploy \
             --stack-name ${TESTING_STACK_NAME} \
+            --template-file ${SAM_TEMPLATE} \
             --capabilities CAPABILITY_IAM \
             --region ${TESTING_REGION} \
             --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
@@ -150,13 +167,7 @@ jobs:
     environment: production  # Requiere aprobación manual
     steps:
       - uses: actions/checkout@v3
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-          
-      - name: Build with SAM
-        run: sam build --template ${SAM_TEMPLATE} --use-container
-
+      
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -168,10 +179,33 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
+      - name: Download model from bucket
+        run: |
+          aws s3 cp s3://${TEST_DATA_BUCKET}/models/densenet121_Opset17.onnx densenet_function/
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Lambda image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ env.PROD_IMAGE_REPOSITORY }}
+          IMAGE_TAG: latest
+        run: |
+          cd densenet_function
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REPOSITORY:$IMAGE_TAG
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
       - name: Deploy to production
         run: |
           sam deploy \
             --stack-name ${PROD_STACK_NAME} \
+            --template-file ${SAM_TEMPLATE} \
             --capabilities CAPABILITY_IAM \
             --region ${PROD_REGION} \
             --s3-bucket ${PROD_ARTIFACTS_BUCKET} \
