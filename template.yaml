@@ -2,6 +2,9 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: 'DenseNet121 ONNX Inference API with FastAPI'
 
+Conditions:
+  IsProd: !Equals [!Ref Stage, 'prod']
+
 Globals:
   Function:
     Timeout: 30
@@ -52,7 +55,10 @@ Resources:
     Properties:
       FunctionName: !Sub 'densenet121-inference-${Stage}'
       PackageType: Image
-      ImageUri: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/densenet121-model-${Stage}:latest'
+      ImageUri: !If 
+        - IsProd
+        - !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/aws-sam-cli-managed-prod-pipeline-resources-imagerepository-jxjisqblyq2w:latest'
+        - !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/aws-sam-cli-managed-dev-pipeline-resources-imagerepository-kzgat478cs9h:latest'
       Architectures:
         - x86_64
       Timeout: 180
