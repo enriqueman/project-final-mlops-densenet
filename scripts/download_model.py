@@ -29,19 +29,33 @@ def find_model_path(container):
     try:
         logger.info("\n=== Buscando archivo del modelo ===")
         
-        # Mostrar estructura completa del contenedor
-        logger.info("Estructura completa del contenedor:")
-        exec_result = container.exec_run('find / -type d 2>/dev/null')
-        if exec_result.exit_code == 0:
-            directories = exec_result.output.decode().strip().split('\n')
-            for directory in directories:
-                if directory and not any(x in directory for x in ['/proc', '/sys', '/dev']):
-                    logger.info(f"Directorio: {directory}")
-                    ls_result = container.exec_run(f'ls -la {directory}')
-                    if ls_result.exit_code == 0:
-                        logger.info(ls_result.output.decode().strip())
+        # Ruta esperada del modelo basada en las capas de la imagen
+        expected_path = '/opt/ml/model/densenet121_Opset17.onnx'
+        logger.info(f"Verificando ruta esperada: {expected_path}")
         
-        # Buscar específicamente archivos .onnx
+        # Verificar si el archivo existe en la ruta esperada
+        test_file = container.exec_run(f'test -f {expected_path}')
+        if test_file.exit_code == 0:
+            logger.info(f"Modelo encontrado en la ruta esperada: {expected_path}")
+            # Verificar el tipo de archivo
+            file_type = container.exec_run(f'file {expected_path}')
+            if file_type.exit_code == 0:
+                logger.info(f"Tipo de archivo: {file_type.output.decode().strip()}")
+            # Verificar tamaño
+            file_size = container.exec_run(f'ls -lh {expected_path}')
+            if file_size.exit_code == 0:
+                logger.info(f"Detalles del archivo: {file_size.output.decode().strip()}")
+            return expected_path
+        
+        logger.info("Modelo no encontrado en la ruta esperada, buscando en otras ubicaciones...")
+        
+        # Verificar el directorio /opt/ml/model
+        logger.info("\nVerificando directorio /opt/ml/model:")
+        exec_result = container.exec_run('ls -la /opt/ml/model')
+        if exec_result.exit_code == 0:
+            logger.info(exec_result.output.decode().strip())
+        
+        # Buscar archivos .onnx
         logger.info("\nBuscando archivos .onnx:")
         exec_result = container.exec_run('find / -name "*.onnx" 2>/dev/null')
         if exec_result.exit_code == 0:
@@ -51,28 +65,26 @@ def find_model_path(container):
                     logger.info(f"Encontrado archivo ONNX: {file}")
                     return file
         
-        # Buscar archivos por nombre parcial
-        logger.info("\nBuscando archivos que contengan 'densenet' o 'model':")
-        exec_result = container.exec_run('find / -type f -exec file {} \; 2>/dev/null | grep -i "densenet\|model"')
+        # Si no encontramos el archivo, mostrar estructura del directorio /opt/ml
+        logger.info("\nEstructura del directorio /opt/ml:")
+        exec_result = container.exec_run('find /opt/ml -type f 2>/dev/null')
         if exec_result.exit_code == 0:
-            model_files = exec_result.output.decode().strip().split('\n')
-            for file in model_files:
-                logger.info(f"Archivo potencial: {file}")
-        
-        # Mostrar todos los archivos en el contenedor
-        logger.info("\nTodos los archivos en el contenedor:")
-        exec_result = container.exec_run('find / -type f 2>/dev/null')
-        if exec_result.exit_code == 0:
-            all_files = exec_result.output.decode().strip().split('\n')
-            for file in all_files:
-                if file and not any(x in file for x in ['/proc', '/sys', '/dev']):
+            files = exec_result.output.decode().strip().split('\n')
+            for file in files:
+                if file:
                     logger.info(f"Archivo: {file}")
-                    # Intentar determinar el tipo de archivo
+                    # Mostrar tipo de archivo
                     file_type = container.exec_run(f'file {file}')
                     if file_type.exit_code == 0:
                         logger.info(f"Tipo: {file_type.output.decode().strip()}")
         
-        raise Exception("No se encontró el archivo del modelo")
+        # Verificar permisos del directorio /opt/ml
+        logger.info("\nVerificando permisos:")
+        exec_result = container.exec_run('ls -la /opt/ml')
+        if exec_result.exit_code == 0:
+            logger.info(exec_result.output.decode().strip())
+        
+        raise Exception("No se encontró el archivo del modelo en la ruta esperada ni en otras ubicaciones")
     except Exception as e:
         logger.error(f"Error buscando modelo: {str(e)}")
         raise
