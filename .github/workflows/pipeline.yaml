@@ -27,6 +27,7 @@ env:
   PROD_REGION: us-east-1
   TEST_DATA_BUCKET: densenet-test-data-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
   STAGE: ${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
+  MODEL_REPOSITORY: densenet121-model-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
 
 jobs:
   test:
@@ -125,6 +126,7 @@ jobs:
           AWS_REGION: ${{ env.TESTING_REGION }}
           STAGE: ${{ env.STAGE }}
           AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
         run: |
           echo "Inspeccionando imagen del modelo..."
           python scripts/inspect_model_image.py
@@ -134,6 +136,7 @@ jobs:
           AWS_REGION: ${{ env.TESTING_REGION }}
           STAGE: ${{ env.STAGE }}
           AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
         run: |
           # Asegurarse que el directorio /tmp existe y tenemos permisos
           sudo mkdir -p /tmp

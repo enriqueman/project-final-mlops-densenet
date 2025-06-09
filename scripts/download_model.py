@@ -6,9 +6,13 @@ import tarfile
 import tempfile
 import logging
 import sys
+import time
 
 # Configurar logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 def get_account_id():
@@ -35,7 +39,7 @@ def find_model_path(container):
             return valid_paths[0]
         
         # Si no encontramos el archivo, listar directorios comunes
-        common_dirs = ['/model', '/models', '/app', '/opt', '/usr/local']
+        common_dirs = ['/model', '/models', '/app', '/workspace']
         for dir in common_dirs:
             exec_result = container.exec_run(f'ls -la {dir}')
             logger.info(f"Contenido de {dir}:")
@@ -53,12 +57,13 @@ def download_model_from_ecr():
         aws_region = os.environ.get('AWS_REGION', 'us-east-1')
         stage = os.environ.get('STAGE', 'dev')
         account_id = os.environ.get('AWS_ACCOUNT_ID') or get_account_id()
-        model_repo = f'densenet121-model-{stage}'
+        model_repo = os.environ.get('MODEL_REPOSITORY', f'densenet121-model-{stage}')
         
         if not account_id:
             raise Exception("No se pudo obtener el Account ID")
         
         logger.info(f"Configuración: Region={aws_region}, Stage={stage}, Account={account_id}")
+        logger.info(f"Repositorio del modelo: {model_repo}")
         
         # Configurar ECR
         ecr_client = boto3.client('ecr', region_name=aws_region)
@@ -109,10 +114,19 @@ def download_model_from_ecr():
             logger.info("Creando contenedor temporal")
             container = docker_client.containers.create(
                 model_uri,
-                command='sleep 1000',  # Mantener el contenedor vivo
+                entrypoint=["/bin/sh", "-c", "tail -f /dev/null"],  # Mantener el contenedor vivo
+                detach=True,
                 tty=True
             )
             container.start()
+            
+            # Esperar un momento para asegurarnos que el contenedor está corriendo
+            time.sleep(2)
+            
+            # Verificar estado del contenedor
+            container.reload()
+            if container.status != 'running':
+                raise Exception(f"El contenedor no se inició correctamente (estado: {container.status})")
             
             # Encontrar la ruta del modelo
             model_path = find_model_path(container)
@@ -158,9 +172,10 @@ def download_model_from_ecr():
         finally:
             # Limpiar
             try:
-                container.stop()
-                container.remove()
-                logger.info("Contenedor temporal eliminado")
+                if 'container' in locals():
+                    container.stop()
+                    container.remove()
+                    logger.info("Contenedor temporal eliminado")
             except Exception as e:
                 logger.warning(f"Error eliminando contenedor temporal: {str(e)}")
             
