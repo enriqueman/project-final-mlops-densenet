@@ -27,23 +27,50 @@ def get_account_id():
 def find_model_path(container):
     """Encontrar la ruta del modelo en el contenedor"""
     try:
-        # Buscar archivos .onnx
+        logger.info("\n=== Buscando archivo del modelo ===")
+        
+        # Mostrar estructura completa del contenedor
+        logger.info("Estructura completa del contenedor:")
+        exec_result = container.exec_run('find / -type d 2>/dev/null')
+        if exec_result.exit_code == 0:
+            directories = exec_result.output.decode().strip().split('\n')
+            for directory in directories:
+                if directory and not any(x in directory for x in ['/proc', '/sys', '/dev']):
+                    logger.info(f"Directorio: {directory}")
+                    ls_result = container.exec_run(f'ls -la {directory}')
+                    if ls_result.exit_code == 0:
+                        logger.info(ls_result.output.decode().strip())
+        
+        # Buscar específicamente archivos .onnx
+        logger.info("\nBuscando archivos .onnx:")
         exec_result = container.exec_run('find / -name "*.onnx" 2>/dev/null')
-        paths = exec_result.output.decode().strip().split('\n')
+        if exec_result.exit_code == 0:
+            onnx_files = exec_result.output.decode().strip().split('\n')
+            for file in onnx_files:
+                if file:
+                    logger.info(f"Encontrado archivo ONNX: {file}")
+                    return file
         
-        # Filtrar rutas válidas
-        valid_paths = [p for p in paths if p and 'densenet' in p.lower()]
+        # Buscar archivos por nombre parcial
+        logger.info("\nBuscando archivos que contengan 'densenet' o 'model':")
+        exec_result = container.exec_run('find / -type f -exec file {} \; 2>/dev/null | grep -i "densenet\|model"')
+        if exec_result.exit_code == 0:
+            model_files = exec_result.output.decode().strip().split('\n')
+            for file in model_files:
+                logger.info(f"Archivo potencial: {file}")
         
-        if valid_paths:
-            logger.info(f"Modelo encontrado en: {valid_paths[0]}")
-            return valid_paths[0]
-        
-        # Si no encontramos el archivo, listar directorios comunes
-        common_dirs = ['/model', '/models', '/app', '/workspace']
-        for dir in common_dirs:
-            exec_result = container.exec_run(f'ls -la {dir}')
-            logger.info(f"Contenido de {dir}:")
-            logger.info(exec_result.output.decode())
+        # Mostrar todos los archivos en el contenedor
+        logger.info("\nTodos los archivos en el contenedor:")
+        exec_result = container.exec_run('find / -type f 2>/dev/null')
+        if exec_result.exit_code == 0:
+            all_files = exec_result.output.decode().strip().split('\n')
+            for file in all_files:
+                if file and not any(x in file for x in ['/proc', '/sys', '/dev']):
+                    logger.info(f"Archivo: {file}")
+                    # Intentar determinar el tipo de archivo
+                    file_type = container.exec_run(f'file {file}')
+                    if file_type.exit_code == 0:
+                        logger.info(f"Tipo: {file_type.output.decode().strip()}")
         
         raise Exception("No se encontró el archivo del modelo")
     except Exception as e:
@@ -105,16 +132,34 @@ def download_model_from_ecr():
             logger.info(f"Descargando imagen: {model_uri}")
             image = docker_client.images.pull(model_uri)
             logger.info("Imagen descargada exitosamente")
+            
+            # Mostrar información de la imagen
+            logger.info("\n=== Información de la imagen ===")
+            image_info = docker_client.api.inspect_image(image.id)
+            logger.info(f"ID: {image.id}")
+            logger.info(f"Tags: {image.tags}")
+            logger.info(f"Creada: {image_info['Created']}")
+            logger.info(f"Tamaño: {image_info['Size']/1024/1024:.2f} MB")
+            logger.info(f"Entrypoint: {image_info['Config']['Entrypoint']}")
+            logger.info(f"Cmd: {image_info['Config']['Cmd']}")
+            logger.info(f"WorkingDir: {image_info['Config']['WorkingDir']}")
+            logger.info(f"Volumes: {image_info['Config'].get('Volumes', 'None')}")
+            logger.info(f"Labels: {image_info['Config'].get('Labels', 'None')}")
+            
+            # Mostrar capas de la imagen
+            logger.info("\nCapas de la imagen:")
+            for layer in image.history():
+                logger.info(f"Comando: {layer.get('CreatedBy', 'N/A')}")
         except Exception as e:
             logger.error(f"Error descargando imagen: {str(e)}")
             raise
         
         try:
             # Crear contenedor temporal
-            logger.info("Creando contenedor temporal")
+            logger.info("\nCreando contenedor temporal")
             container = docker_client.containers.create(
                 model_uri,
-                entrypoint=["/bin/sh", "-c", "tail -f /dev/null"],  # Mantener el contenedor vivo
+                entrypoint=["/bin/sh", "-c", "tail -f /dev/null"],
                 detach=True,
                 tty=True
             )
