@@ -6,13 +6,13 @@ permissions_provider = "AWS IAM"
 [dev.pipeline_bootstrap.parameters]
 pipeline_execution_role = "arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie"
 cloudformation_execution_role = "arn:aws:iam::471112837636:role/aws-sam-cli-managed-perso-CloudFormationExecutionRo-LVTGVTJzrPve"
-artifacts_bucket = ""
+artifacts_bucket = "aws-sam-cli-managed-personal-accou-artifactsbucket-7twnozkcwdt3"
 image_repository = "471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-dev-pipeline-resources-imagerepository-kzgat478cs9h"
 region = "us-east-1"
 
 [prod.pipeline_bootstrap.parameters]
 pipeline_execution_role = "arn:aws:iam::471112837636:user/aws-sam-cli-managed-personal-account-d-PipelineUser-0c4EBLF4Lx9H"
 cloudformation_execution_role = "arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie"
-artifacts_bucket = "aws-sam-cli-managed-perso-CloudFormationExecutionRo-LVTGVTJzrPve"
+artifacts_bucket = "aws-sam-cli-managed-personal-accou-artifactsbucket-lvukcyulkbfh"
 image_repository = "471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-prod-pipeline-resources-imagerepository-jxjisqblyq2w"
 region = "us-east-1"
