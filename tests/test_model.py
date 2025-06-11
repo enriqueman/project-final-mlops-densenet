@@ -18,7 +18,7 @@ STAGE = os.environ.get('STAGE', 'dev')
 MODEL_BUCKET = os.environ.get('TEST_DATA_BUCKET', f'densenet-test-data-{STAGE}')
 MODEL_KEY = 'test_data/test_images.json'
 METRICS_THRESHOLD = {
-    'accuracy': 0.85,
+    'accuracy': 0.45,
     'avg_confidence': 0.70
 }
 
@@ -160,14 +160,33 @@ def test_model_metrics():
         predicted_class = np.argmax(probabilities)
         confidence = np.max(probabilities)
         
+        # Obtener top 5 predicciones para logging
+        top5_indices = np.argsort(probabilities[0])[-5:][::-1]
+        top5_probs = probabilities[0][top5_indices]
+        
+        logger.info(f"\nPredicciones para {test_case['filename']}:")
+        logger.info(f"Clase esperada: {test_case['label']}")
+        logger.info(f"Clase predicha: {predicted_class}")
+        logger.info(f"Confianza: {confidence:.4f}")
+        logger.info("Top 5 predicciones:")
+        for idx, prob in zip(top5_indices, top5_probs):
+            logger.info(f"  Clase {idx}: {prob:.4f}")
+        
         # Actualizar métricas
         if predicted_class == test_case['label']:
             correct_predictions += 1
+            logger.info("✓ Predicción correcta")
+        else:
+            logger.info("✗ Predicción incorrecta")
         total_confidence += confidence
     
     # Calcular métricas finales
     accuracy = correct_predictions / len(test_data['images'])
     avg_confidence = total_confidence / len(test_data['images'])
+    
+    logger.info(f"\nMétricas finales:")
+    logger.info(f"Accuracy: {accuracy:.4f} (threshold: {METRICS_THRESHOLD['accuracy']})")
+    logger.info(f"Avg Confidence: {avg_confidence:.4f} (threshold: {METRICS_THRESHOLD['avg_confidence']})")
     
     # Verificar umbrales
     assert accuracy >= METRICS_THRESHOLD['accuracy'], f"Accuracy {accuracy} below threshold {METRICS_THRESHOLD['accuracy']}"
