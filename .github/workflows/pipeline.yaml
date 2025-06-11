@@ -16,13 +16,13 @@ env:
   TESTING_STACK_NAME: densenet-lambda-dev
   TESTING_PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie
   TESTING_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-perso-CloudFormationExecutionRo-LVTGVTJzrPve
-  TESTING_ARTIFACTS_BUCKET: 
+  TESTING_ARTIFACTS_BUCKET: aws-sam-cli-managed-personal-accou-artifactsbucket-7twnozkcwdt3
   TESTING_IMAGE_REPOSITORY: 471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-dev-pipeline-resources-imagerepository-kzgat478cs9h
   TESTING_REGION: us-east-1
   PROD_STACK_NAME: densenet-lambda-prod
   PROD_PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:user/aws-sam-cli-managed-personal-account-d-PipelineUser-0c4EBLF4Lx9H
   PROD_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie
-  PROD_ARTIFACTS_BUCKET: aws-sam-cli-managed-perso-CloudFormationExecutionRo-LVTGVTJzrPve
+  PROD_ARTIFACTS_BUCKET: aws-sam-cli-managed-personal-accou-artifactsbucket-lvukcyulkbfh
   PROD_IMAGE_REPOSITORY: 471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-prod-pipeline-resources-imagerepository-jxjisqblyq2w
   PROD_REGION: us-east-1
   TEST_DATA_BUCKET: densenet-test-data-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
