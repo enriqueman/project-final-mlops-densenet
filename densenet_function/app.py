@@ -6,7 +6,7 @@ import os
 import numpy as np
 from PIL import Image
 import onnxruntime as ort
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import FastAPI, HTTPException, File, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict
@@ -248,24 +248,41 @@ async def predict_image(request: ImageRequest):
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
 @app.post("/predict-file")
-async def predict_from_file(file: UploadFile = File(...), top_k: int = 5):
+async def predict_from_file(
+    file: UploadFile = File(..., description="Imagen a procesar"),
+    top_k: int = Query(default=5, description="Número de predicciones top a retornar")
+):
     """Endpoint para subir archivo directamente"""
     
-    if not file.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="El archivo debe ser una imagen")
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(
+            status_code=400,
+            detail="El archivo debe ser una imagen (JPEG, PNG, etc.)"
+        )
     
     try:
         # Leer archivo y convertir a base64
         image_bytes = await file.read()
+        if not image_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail="El archivo está vacío"
+            )
+            
         image_b64 = base64.b64encode(image_bytes).decode('utf-8')
         
         # Usar el endpoint principal
         request = ImageRequest(image=image_b64, top_k=top_k)
         return await predict_image(request)
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error procesando archivo: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error procesando archivo: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error procesando archivo: {str(e)}"
+        )
 
 @app.get("/model-info")
 async def get_model_info():

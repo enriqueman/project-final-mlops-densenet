@@ -9,7 +9,8 @@ RUN yum update -y && yum install -y \
 
 # Copiar requirements y instalar dependencias Python
 COPY requirements.txt ${LAMBDA_TASK_ROOT}
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir python-multipart==0.0.6
 
 # Crear directorio para el modelo
 RUN mkdir -p ${LAMBDA_TASK_ROOT}/model
