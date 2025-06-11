@@ -8,117 +8,24 @@ import onnxruntime as ort
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from mangum import Mangum
 from typing import List, Optional
 import logging
-import boto3
-import json
-import tempfile
-import tarfile
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Variables de entorno para ECR
+# Variables de entorno
 AWS_REGION = os.environ.get('APP_REGION', 'us-east-1')
 STAGE = os.environ.get('APP_STAGE', 'dev')
 ACCOUNT_ID = os.environ.get('APP_ACCOUNT_ID', '')
-MODEL_ECR_REPOSITORY = os.environ.get('MODEL_ECR_REPOSITORY', f'densenet121-model-{STAGE}')
 
-# Path temporal para el modelo
-MODEL_PATH = "/tmp/densenet121_Opset17.onnx"
+# Path para el modelo (incluido en el contenedor)
+MODEL_PATH = "/var/task/model/densenet121_Opset17.onnx"
 
-def get_account_id():
-    """Obtener Account ID de AWS"""
-    try:
-        sts_client = boto3.client('sts', region_name=AWS_REGION)
-        return sts_client.get_caller_identity()['Account']
-    except Exception as e:
-        logger.error(f"Error obteniendo Account ID: {str(e)}")
-        return None
-
-def download_model_from_ecr():
-    """Descargar modelo desde ECR usando AWS SDK solamente"""
-    try:
-        logger.info("Descargando modelo desde ECR usando AWS SDK...")
-        
-        # Obtener Account ID si no está disponible
-        account_id = ACCOUNT_ID or get_account_id()
-        if not account_id:
-            logger.error("No se pudo obtener el Account ID")
-            return False
-        
-        # Configurar ECR
-        ecr_client = boto3.client('ecr', region_name=AWS_REGION)
-        
-        try:
-            # Obtener el manifiesto de la imagen
-            response = ecr_client.describe_images(
-                repositoryName=MODEL_ECR_REPOSITORY,
-                imageIds=[{'imageTag': 'latest'}]
-            )
-            
-            if not response['imageDetails']:
-                logger.error(f"No se encontró imagen 'latest' en {MODEL_ECR_REPOSITORY}")
-                return False
-            
-            # Obtener el manifiesto
-            manifest_response = ecr_client.get_download_url_for_layer(
-                repositoryName=MODEL_ECR_REPOSITORY,
-                layerDigest=response['imageDetails'][0]['imageManifest']
-            )
-            
-            logger.error("MÉTODO 1 FALLIDO - ECR no permite descarga directa de capas individuales")
-            return False
-            
-        except Exception as ecr_error:
-            logger.error(f"Error accediendo a ECR: {str(ecr_error)}")
-            
-            # MÉTODO ALTERNATIVO: Usar S3 si el modelo también está allí
-            logger.info("Intentando método alternativo...")
-            return download_model_from_s3()
-        
-    except Exception as e:
-        logger.error(f"Error descargando modelo desde ECR: {str(e)}")
-        return False
-
-def download_model_from_s3():
-    """Método alternativo: descargar desde S3"""
-    try:
-        logger.info("Intentando descargar modelo desde S3...")
-        
-        s3_client = boto3.client('s3', region_name=AWS_REGION)
-        bucket_name = f'densenet-models-{STAGE}'
-        key = 'densenet121_Opset17.onnx'
-        
-        # Descargar desde S3
-        s3_client.download_file(bucket_name, key, MODEL_PATH)
-        logger.info("Modelo descargado exitosamente desde S3")
-        return True
-        
-    except Exception as s3_error:
-        logger.error(f"Error descargando desde S3: {str(s3_error)}")
-        return False
-
-def extract_model_from_ecr_alternative():
-    """Método alternativo usando ECR Registry API directamente"""
-    try:
-        logger.info("Intentando extraer modelo usando ECR Registry API...")
-        
-        # Este método requiere implementar el protocolo de Docker Registry API v2
-        # que es complejo para este caso de uso
-        
-        # Por ahora, usar un modelo precargado o S3
-        logger.warning("Método ECR Registry API no implementado - usando fallback")
-        return False
-        
-    except Exception as e:
-        logger.error(f"Error en método alternativo ECR: {str(e)}")
-        return False
-
-# Inicializar sesión como None
+# Inicializar variables globales
 session = None
 input_name = None
 input_shape = None
@@ -129,15 +36,12 @@ def load_model():
     global session, input_name, input_shape, output_name
     
     try:
-        # Si el modelo no existe, intentar descargarlo
+        # Verificar si el modelo existe
         if not os.path.exists(MODEL_PATH):
-            logger.info("Modelo no encontrado localmente, intentando descargar...")
-            
-            # Método 1: Intentar desde S3 (recomendado)
-            if not download_model_from_s3():
-                # Método 2: Usar modelo predeterminado si existe
-                logger.warning("No se pudo descargar modelo - usando modelo por defecto si existe")
-                return False
+            logger.error(f"Modelo no encontrado en: {MODEL_PATH}")
+            logger.info(f"Contenido de /var/task: {os.listdir('/var/task') if os.path.exists('/var/task') else 'No existe'}")
+            logger.info(f"Contenido de /var/task/model: {os.listdir('/var/task/model') if os.path.exists('/var/task/model') else 'No existe'}")
+            return False
         
         # Cargar el modelo
         logger.info(f"Cargando modelo desde: {MODEL_PATH}")
@@ -160,24 +64,32 @@ def load_model():
 # Intentar cargar el modelo al inicio
 model_loaded = load_model()
 
-# Modelos Pydantic
+# Modelos Pydantic con configuración para evitar warnings
 class ImageRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     image: str  # base64 encoded image
     top_k: Optional[int] = 5
 
 class PredictionResult(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     rank: int
     class_id: int
     probability: float
     confidence: str
 
 class InferenceResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     success: bool
     predictions: List[PredictionResult]
     inference_time_ms: float
     model_info: dict
 
 class HealthResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     status: str
     model_loaded: bool
     model_info: Optional[dict] = None
@@ -239,13 +151,15 @@ async def health_check():
     global session
     
     debug_info = {
-        "model_path_exists": os.path.exists(MODEL_PATH),
         "model_path": MODEL_PATH,
+        "model_path_exists": os.path.exists(MODEL_PATH),
         "aws_region": AWS_REGION,
         "stage": STAGE,
-        "account_id": ACCOUNT_ID[:8] + "****" if ACCOUNT_ID else "Not set",
-        "ecr_repo": MODEL_ECR_REPOSITORY,
-        "session_loaded": session is not None
+        "session_loaded": session is not None,
+        "working_directory": os.getcwd(),
+        "lambda_task_root": os.environ.get('LAMBDA_TASK_ROOT', 'Not set'),
+        "var_task_contents": os.listdir('/var/task') if os.path.exists('/var/task') else 'No existe',
+        "model_dir_contents": os.listdir('/var/task/model') if os.path.exists('/var/task/model') else 'No existe'
     }
     
     # Intentar cargar el modelo si no está cargado
@@ -263,7 +177,7 @@ async def health_check():
             "input_name": input_name if session else None,
             "output_name": output_name if session else None,
             "parameters": 7978856,
-            "source": "S3 or ECR"
+            "source": "Included in container"
         } if session else None,
         debug_info=debug_info
     )

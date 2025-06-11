@@ -1,16 +1,9 @@
-# Core ML/AI dependencies
 onnxruntime==1.15.1
 pillow==10.1.0
 numpy==1.24.4
-
-# AWS SDK
 boto3==1.28.77
-
-# FastAPI and web framework
 fastapi==0.104.1
 mangum==0.17.0
 uvicorn[standard]==0.24.0
 pydantic==2.4.2
-
-# Remove docker dependency - not supported in Lambda
-# docker==6.1.3  # REMOVED - Docker-in-Docker not supported in Lambda
+python-multipart==0.0.6
