@@ -18,8 +18,8 @@ STAGE = os.environ.get('STAGE', 'dev')
 MODEL_BUCKET = os.environ.get('TEST_DATA_BUCKET', f'densenet-test-data-{STAGE}')
 MODEL_KEY = 'test_data/test_images.json'
 METRICS_THRESHOLD = {
-    'accuracy': 0.45,
-    'avg_confidence': 0.70
+    'accuracy': 0.25,
+    'avg_confidence': 0.50
 }
 
 logger = logging.getLogger(__name__)

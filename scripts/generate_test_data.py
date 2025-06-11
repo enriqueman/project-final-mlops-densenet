@@ -25,8 +25,8 @@ TEST_IMAGES = [
         "filename": "dog.jpg"
     },
     {
-        "url": "https://raw.githubusercontent.com/pytorch/hub/master/images/cat.jpg",
-        "label": 281,  # Gato (ImageNet)
+        "url": "https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/n02123045_tabby.JPEG",
+        "label": 281,  # Gato (ImageNet - tabby cat)
         "filename": "cat.jpg"
     }
 ]
