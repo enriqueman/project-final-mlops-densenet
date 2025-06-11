@@ -114,8 +114,8 @@ Resources:
                 - s3:GetObject
                 - s3:ListBucket
               Resource:
-                - !GetAtt TestDataBucket.Arn
-                - !Sub '${TestDataBucket.Arn}/*'
+                - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}'
+                - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}/*'
 
   # API Gateway
   DenseNetApi:
@@ -184,44 +184,6 @@ Resources:
       Dimensions:
         - Name: FunctionName
           Value: !Ref DenseNetInferenceFunction
-
-  # Bucket S3 para datos de prueba
-  TestDataBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub 'densenet-test-data-${Stage}'
-      VersioningConfiguration:
-        Status: Enabled
-      LifecycleConfiguration:
-        Rules:
-          - Id: DeleteOldVersions
-            Status: Enabled
-            NoncurrentVersionExpiration:
-              NoncurrentDays: 30
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-
-  # Política para el bucket de datos de prueba
-  TestDataBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref TestDataBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowLambdaAccess
-            Effect: Allow
-            Principal:
-              AWS: !GetAtt DenseNetInferenceFunction.Arn
-            Action:
-              - s3:GetObject
-              - s3:ListBucket
-            Resource:
-              - !GetAtt TestDataBucket.Arn
-              - !Sub '${TestDataBucket.Arn}/*'
 
 Outputs:
   DenseNetApiUrl:
