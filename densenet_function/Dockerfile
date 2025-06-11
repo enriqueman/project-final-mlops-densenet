@@ -1,7 +1,7 @@
 # Usar la imagen base oficial de Lambda para Python
 FROM public.ecr.aws/lambda/python:3.9
 
-# Instalar dependencias del sistema si es necesario
+# Instalar dependencias del sistema necesarias para ONNX y PIL
 RUN yum update -y && yum install -y \
     gcc \
     g++ \
@@ -16,6 +16,9 @@ RUN mkdir -p /tmp
 
 # Copiar el código de la aplicación
 COPY app.py ${LAMBDA_TASK_ROOT}
+
+# Establecer permisos para el directorio tmp
+RUN chmod 755 /tmp
 
 # Comando para ejecutar la función Lambda
 CMD ["app.lambda_handler"]

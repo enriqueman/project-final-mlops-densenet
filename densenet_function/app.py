@@ -13,8 +13,9 @@ from mangum import Mangum
 from typing import List, Optional
 import logging
 import boto3
-import docker
+import json
 import tempfile
+import tarfile
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -39,9 +40,9 @@ def get_account_id():
         return None
 
 def download_model_from_ecr():
-    """Descargar modelo desde ECR"""
+    """Descargar modelo desde ECR usando AWS SDK solamente"""
     try:
-        logger.info("Descargando modelo desde ECR...")
+        logger.info("Descargando modelo desde ECR usando AWS SDK...")
         
         # Obtener Account ID si no está disponible
         account_id = ACCOUNT_ID or get_account_id()
@@ -52,78 +53,76 @@ def download_model_from_ecr():
         # Configurar ECR
         ecr_client = boto3.client('ecr', region_name=AWS_REGION)
         
-        # Construir URI del modelo
-        model_image_uri = f"{account_id}.dkr.ecr.{AWS_REGION}.amazonaws.com/{MODEL_ECR_REPOSITORY}:latest"
-        
-        logger.info(f"Descargando imagen: {model_image_uri}")
-        
-        # Obtener token de autorización para Docker
-        token_response = ecr_client.get_authorization_token()
-        token = token_response['authorizationData'][0]['authorizationToken']
-        registry_url = token_response['authorizationData'][0]['proxyEndpoint']
-        
-        # Decodificar token
-        username, password = base64.b64decode(token).decode().split(':')
-        
-        # Usar el cliente Docker de Python
         try:
-            docker_client = docker.from_env()
-            
-            # Login
-            docker_client.login(
-                username=username,
-                password=password,
-                registry=registry_url
+            # Obtener el manifiesto de la imagen
+            response = ecr_client.describe_images(
+                repositoryName=MODEL_ECR_REPOSITORY,
+                imageIds=[{'imageTag': 'latest'}]
             )
             
-            # Pull de la imagen
-            logger.info("Descargando imagen del modelo...")
-            image = docker_client.images.pull(model_image_uri)
+            if not response['imageDetails']:
+                logger.error(f"No se encontró imagen 'latest' en {MODEL_ECR_REPOSITORY}")
+                return False
             
-            # Crear un contenedor temporal para extraer el archivo
-            container = docker_client.containers.create(
-                image=model_image_uri,
-                command="true"  # comando dummy
+            # Obtener el manifiesto
+            manifest_response = ecr_client.get_download_url_for_layer(
+                repositoryName=MODEL_ECR_REPOSITORY,
+                layerDigest=response['imageDetails'][0]['imageManifest']
             )
             
-            # Extraer el archivo del contenedor
-            logger.info("Extrayendo modelo del contenedor...")
-            
-            # Obtener el archivo como tar stream
-            stream, _ = container.get_archive('/model/densenet121_Opset17.onnx')
-            
-            # Escribir el archivo
-            import tarfile
-            with tempfile.NamedTemporaryFile() as tmp_tar:
-                for chunk in stream:
-                    tmp_tar.write(chunk)
-                tmp_tar.flush()
-                
-                # Extraer del tar
-                with tarfile.open(tmp_tar.name, 'r') as tar:
-                    tar.extractall('/tmp/')
-                    
-            # El archivo ahora debería estar en /tmp/densenet121_Opset17.onnx
-            if os.path.exists('/tmp/densenet121_Opset17.onnx'):
-                # Mover al path esperado
-                os.rename('/tmp/densenet121_Opset17.onnx', MODEL_PATH)
-                logger.info("Modelo extraído exitosamente")
-            
-            # Limpiar contenedor
-            container.remove()
-            
-            return True
-            
-        except Exception as docker_error:
-            logger.error(f"Error con Docker: {str(docker_error)}")
+            logger.error("MÉTODO 1 FALLIDO - ECR no permite descarga directa de capas individuales")
             return False
+            
+        except Exception as ecr_error:
+            logger.error(f"Error accediendo a ECR: {str(ecr_error)}")
+            
+            # MÉTODO ALTERNATIVO: Usar S3 si el modelo también está allí
+            logger.info("Intentando método alternativo...")
+            return download_model_from_s3()
         
     except Exception as e:
         logger.error(f"Error descargando modelo desde ECR: {str(e)}")
         return False
 
+def download_model_from_s3():
+    """Método alternativo: descargar desde S3"""
+    try:
+        logger.info("Intentando descargar modelo desde S3...")
+        
+        s3_client = boto3.client('s3', region_name=AWS_REGION)
+        bucket_name = f'densenet-models-{STAGE}'
+        key = 'densenet121_Opset17.onnx'
+        
+        # Descargar desde S3
+        s3_client.download_file(bucket_name, key, MODEL_PATH)
+        logger.info("Modelo descargado exitosamente desde S3")
+        return True
+        
+    except Exception as s3_error:
+        logger.error(f"Error descargando desde S3: {str(s3_error)}")
+        return False
+
+def extract_model_from_ecr_alternative():
+    """Método alternativo usando ECR Registry API directamente"""
+    try:
+        logger.info("Intentando extraer modelo usando ECR Registry API...")
+        
+        # Este método requiere implementar el protocolo de Docker Registry API v2
+        # que es complejo para este caso de uso
+        
+        # Por ahora, usar un modelo precargado o S3
+        logger.warning("Método ECR Registry API no implementado - usando fallback")
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error en método alternativo ECR: {str(e)}")
+        return False
+
 # Inicializar sesión como None
 session = None
+input_name = None
+input_shape = None
+output_name = None
 
 def load_model():
     """Cargar el modelo ONNX"""
@@ -132,11 +131,16 @@ def load_model():
     try:
         # Si el modelo no existe, intentar descargarlo
         if not os.path.exists(MODEL_PATH):
-            if not download_model_from_ecr():
-                logger.error("No se pudo descargar el modelo")
+            logger.info("Modelo no encontrado localmente, intentando descargar...")
+            
+            # Método 1: Intentar desde S3 (recomendado)
+            if not download_model_from_s3():
+                # Método 2: Usar modelo predeterminado si existe
+                logger.warning("No se pudo descargar modelo - usando modelo por defecto si existe")
                 return False
         
         # Cargar el modelo
+        logger.info(f"Cargando modelo desde: {MODEL_PATH}")
         providers = ['CPUExecutionProvider']
         session = ort.InferenceSession(MODEL_PATH, providers=providers)
         logger.info("Modelo ONNX cargado exitosamente")
@@ -145,6 +149,7 @@ def load_model():
         input_shape = session.get_inputs()[0].shape
         output_name = session.get_outputs()[0].name
         
+        logger.info(f"Modelo cargado - Input: {input_name}, Shape: {input_shape}, Output: {output_name}")
         return True
         
     except Exception as e:
@@ -176,8 +181,9 @@ class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     model_info: Optional[dict] = None
+    debug_info: Optional[dict] = None
 
-# Crear FastAPI app con configuración simplificada para Lambda
+# Crear FastAPI app
 app = FastAPI(
     title="DenseNet121 ONNX Inference API",
     description="API para inferencia con modelo DenseNet121 en AWS Lambda",
@@ -187,7 +193,7 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
-# Configurar CORS con más opciones
+# Configurar CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -232,9 +238,21 @@ async def health_check():
     """Endpoint de salud"""
     global session
     
+    debug_info = {
+        "model_path_exists": os.path.exists(MODEL_PATH),
+        "model_path": MODEL_PATH,
+        "aws_region": AWS_REGION,
+        "stage": STAGE,
+        "account_id": ACCOUNT_ID[:8] + "****" if ACCOUNT_ID else "Not set",
+        "ecr_repo": MODEL_ECR_REPOSITORY,
+        "session_loaded": session is not None
+    }
+    
     # Intentar cargar el modelo si no está cargado
     if session is None:
+        logger.info("Intentando recargar modelo...")
         model_loaded = load_model()
+        debug_info["reload_attempt"] = model_loaded
     
     return HealthResponse(
         status="healthy" if session is not None else "unhealthy",
@@ -242,9 +260,12 @@ async def health_check():
         model_info={
             "name": "DenseNet121",
             "input_shape": input_shape if session else None,
+            "input_name": input_name if session else None,
+            "output_name": output_name if session else None,
             "parameters": 7978856,
-            "source": "Downloaded from ECR"
-        } if session else None
+            "source": "S3 or ECR"
+        } if session else None,
+        debug_info=debug_info
     )
 
 @app.get("/health", response_model=HealthResponse)
@@ -252,41 +273,17 @@ async def get_health():
     """Alias para health check"""
     return await health_check()
 
-# Endpoint personalizado para docs si hay problemas
-@app.get("/api-docs", response_class=HTMLResponse)
-async def custom_docs():
-    """Endpoint alternativo para documentación"""
-    docs_html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>DenseNet121 API Documentation</title>
-        <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@3.25.0/swagger-ui.css" />
-    </head>
-    <body>
-        <div id="swagger-ui"></div>
-        <script src="https://unpkg.com/swagger-ui-dist@3.25.0/swagger-ui-bundle.js"></script>
-        <script>
-        SwaggerUIBundle({
-            url: '/openapi.json',
-            dom_id: '#swagger-ui',
-            presets: [
-                SwaggerUIBundle.presets.apis,
-                SwaggerUIBundle.presets.standalone
-            ]
-        });
-        </script>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=docs_html)
-
 @app.post("/predict", response_model=InferenceResponse)
 async def predict_image(request: ImageRequest):
     """Endpoint principal de predicción"""
     
     if session is None:
-        raise HTTPException(status_code=500, detail="Modelo no está cargado")
+        # Intentar cargar una vez más
+        if not load_model():
+            raise HTTPException(
+                status_code=500, 
+                detail="Modelo no está cargado. Revisa logs para más detalles."
+            )
     
     try:
         # Preprocesar imagen
@@ -368,9 +365,10 @@ async def get_model_info():
         "input_name": input_name,
         "output_name": output_name,
         "parameters": 7978856,
-        "providers": session.get_providers(),
-        "opset_version": 17
+        "providers": session.get_providers() if session else [],
+        "opset_version": 17,
+        "model_file_size": os.path.getsize(MODEL_PATH) if os.path.exists(MODEL_PATH) else 0
     }
 
-# Crear handler para Lambda usando Mangum con configuración simplificada
+# Crear handler para Lambda
 lambda_handler = Mangum(app, lifespan="off")
