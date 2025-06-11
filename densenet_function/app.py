@@ -7,6 +7,7 @@ from PIL import Image
 import onnxruntime as ort
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from mangum import Mangum
 from typing import List, Optional
@@ -176,20 +177,26 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     model_info: Optional[dict] = None
 
-# Crear FastAPI app
+# Crear FastAPI app con configuración mejorada para Lambda
 app = FastAPI(
     title="DenseNet121 ONNX Inference API",
     description="API para inferencia con modelo DenseNet121 en AWS Lambda",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    # Configurar root_path para Lambda
+    root_path=f"/{STAGE}" if STAGE else ""
 )
 
-# Configurar CORS
+# Configurar CORS con más opciones
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 def preprocess_image(image_data: str) -> np.ndarray:
@@ -246,6 +253,35 @@ async def health_check():
 async def get_health():
     """Alias para health check"""
     return await health_check()
+
+# Endpoint personalizado para docs si hay problemas
+@app.get("/api-docs", response_class=HTMLResponse)
+async def custom_docs():
+    """Endpoint alternativo para documentación"""
+    docs_html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>DenseNet121 API Documentation</title>
+        <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@3.25.0/swagger-ui.css" />
+    </head>
+    <body>
+        <div id="swagger-ui"></div>
+        <script src="https://unpkg.com/swagger-ui-dist@3.25.0/swagger-ui-bundle.js"></script>
+        <script>
+        SwaggerUIBundle({
+            url: '/openapi.json',
+            dom_id: '#swagger-ui',
+            presets: [
+                SwaggerUIBundle.presets.apis,
+                SwaggerUIBundle.presets.standalone
+            ]
+        });
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=docs_html)
 
 @app.post("/predict", response_model=InferenceResponse)
 async def predict_image(request: ImageRequest):
@@ -338,5 +374,9 @@ async def get_model_info():
         "opset_version": 17
     }
 
-# Crear handler para Lambda usando Mangum
-lambda_handler = Mangum(app, lifespan="off")
+# Crear handler para Lambda usando Mangum con configuración mejorada
+lambda_handler = Mangum(
+    app, 
+    lifespan="off",
+    api_gateway_base_path=f"/{STAGE}" if STAGE else None
+)

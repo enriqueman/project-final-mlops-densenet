@@ -117,7 +117,7 @@ Resources:
                 - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}'
                 - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}/*'
 
-  # API Gateway
+  # API Gateway con configuración mejorada
   DenseNetApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -127,21 +127,64 @@ Resources:
         Type: REGIONAL
       Cors:
         AllowMethods: "'GET,POST,OPTIONS'"
-        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,Accept,Accept-Encoding'"
         AllowOrigin: "'*'"
         MaxAge: "'600'"
       # Configuración correcta de throttling usando MethodSettings
       MethodSettings:
-        - ResourcePath: "/*" # Aplica a todos los recursos
-          HttpMethod: "*"    # Aplica a todos los métodos
+        - ResourcePath: "/*"
+          HttpMethod: "*"
           ThrottlingRateLimit: 100
           ThrottlingBurstLimit: 200
-      # Request/Response templates
+      # Configuración específica para FastAPI
+      DefinitionBody:
+        swagger: "2.0"
+        info:
+          title: !Sub "DenseNet121 API - ${Stage}"
+          version: "1.0"
+        basePath: !Sub "/${Stage}"
+        schemes:
+          - https
+        paths:
+          /{proxy+}:
+            x-amazon-apigateway-any-method:
+              produces:
+                - application/json
+                - text/html
+              parameters:
+                - name: proxy
+                  in: path
+                  required: true
+                  type: string
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DenseNetInferenceFunction.Arn}/invocations"
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+                contentHandling: CONVERT_TO_TEXT
+          /:
+            x-amazon-apigateway-any-method:
+              produces:
+                - application/json
+                - text/html
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DenseNetInferenceFunction.Arn}/invocations"
+                passthroughBehavior: when_no_match
+                httpMethod: POST
+                type: aws_proxy
+                contentHandling: CONVERT_TO_TEXT
+      # Gateway Responses mejoradas
       GatewayResponses:
         DEFAULT_4XX:
+          ResponseParameters:
+            gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+            gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
           ResponseTemplates:
             application/json: '{"message": $context.error.messageString, "type": "client_error"}'
         DEFAULT_5XX:
+          ResponseParameters:
+            gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+            gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
           ResponseTemplates:
             application/json: '{"message": $context.error.messageString, "type": "server_error"}'
 
@@ -179,7 +222,7 @@ Resources:
       Statistic: Average
       Period: 300
       EvaluationPeriods: 2
-      Threshold: 10000  # 10 segundos
+      Threshold: 10000
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
         - Name: FunctionName
@@ -212,7 +255,10 @@ Outputs:
     Description: 'API Documentation (FastAPI Swagger)'
     Value: !Sub 'https://${DenseNetApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/docs'
 
-  # Output para referencia del repositorio del modelo (creado manualmente)
+  RedocDocsUrl:
+    Description: 'API Documentation (ReDoc)'
+    Value: !Sub 'https://${DenseNetApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/redoc'
+
   ModelECRRepositoryName:
     Description: 'Model ECR Repository Name (created manually)'
     Value: !Sub 'densenet121-model-${Stage}'
