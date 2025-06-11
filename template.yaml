@@ -70,18 +70,18 @@ Resources:
           APP_ACCOUNT_ID: !Ref 'AWS::AccountId'
           MODEL_ECR_REPOSITORY: !Sub 'densenet121-model-${Stage}'
       Events:
-        # API Gateway para todos los endpoints
-        ApiRoot:
-          Type: Api
+        # API Gateway simplificado
+        HttpApiEvent:
+          Type: HttpApi
           Properties:
-            RestApiId: !Ref DenseNetApi
-            Path: /
-            Method: ANY
-        ApiProxy:
-          Type: Api
-          Properties:
-            RestApiId: !Ref DenseNetApi
+            ApiId: !Ref DenseNetApi
             Path: /{proxy+}
+            Method: ANY
+        HttpApiRootEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DenseNetApi
+            Path: /
             Method: ANY
       # Políticas IAM
       Policies:
@@ -117,76 +117,19 @@ Resources:
                 - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}'
                 - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}/*'
 
-  # API Gateway con configuración mejorada
+  # HTTP API Gateway (más simple que REST API)
   DenseNetApi:
-    Type: AWS::Serverless::Api
+    Type: AWS::Serverless::HttpApi
     Properties:
-      Name: !Sub 'densenet121-api-${Stage}'
       StageName: !Ref Stage
-      EndpointConfiguration:
-        Type: REGIONAL
-      Cors:
-        AllowMethods: "'GET,POST,OPTIONS'"
-        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,Accept,Accept-Encoding'"
-        AllowOrigin: "'*'"
-        MaxAge: "'600'"
-      # Configuración correcta de throttling usando MethodSettings
-      MethodSettings:
-        - ResourcePath: "/*"
-          HttpMethod: "*"
-          ThrottlingRateLimit: 100
-          ThrottlingBurstLimit: 200
-      # Configuración específica para FastAPI
-      DefinitionBody:
-        swagger: "2.0"
-        info:
-          title: !Sub "DenseNet121 API - ${Stage}"
-          version: "1.0"
-        basePath: !Sub "/${Stage}"
-        schemes:
-          - https
-        paths:
-          /{proxy+}:
-            x-amazon-apigateway-any-method:
-              produces:
-                - application/json
-                - text/html
-              parameters:
-                - name: proxy
-                  in: path
-                  required: true
-                  type: string
-              x-amazon-apigateway-integration:
-                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DenseNetInferenceFunction.Arn}/invocations"
-                passthroughBehavior: when_no_match
-                httpMethod: POST
-                type: aws_proxy
-                contentHandling: CONVERT_TO_TEXT
-          /:
-            x-amazon-apigateway-any-method:
-              produces:
-                - application/json
-                - text/html
-              x-amazon-apigateway-integration:
-                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DenseNetInferenceFunction.Arn}/invocations"
-                passthroughBehavior: when_no_match
-                httpMethod: POST
-                type: aws_proxy
-                contentHandling: CONVERT_TO_TEXT
-      # Gateway Responses mejoradas
-      GatewayResponses:
-        DEFAULT_4XX:
-          ResponseParameters:
-            gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
-            gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
-          ResponseTemplates:
-            application/json: '{"message": $context.error.messageString, "type": "client_error"}'
-        DEFAULT_5XX:
-          ResponseParameters:
-            gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
-            gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
-          ResponseTemplates:
-            application/json: '{"message": $context.error.messageString, "type": "server_error"}'
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - "*"
+        AllowMethods:
+          - "*"
+        MaxAge: 600
 
   # CloudWatch Log Group
   DenseNetLogGroup:

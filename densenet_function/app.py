@@ -177,16 +177,14 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     model_info: Optional[dict] = None
 
-# Crear FastAPI app con configuración mejorada para Lambda
+# Crear FastAPI app con configuración simplificada para Lambda
 app = FastAPI(
     title="DenseNet121 ONNX Inference API",
     description="API para inferencia con modelo DenseNet121 en AWS Lambda",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
-    openapi_url="/openapi.json",
-    # Configurar root_path para Lambda
-    root_path=f"/{STAGE}" if STAGE else ""
+    openapi_url="/openapi.json"
 )
 
 # Configurar CORS con más opciones
@@ -374,9 +372,5 @@ async def get_model_info():
         "opset_version": 17
     }
 
-# Crear handler para Lambda usando Mangum con configuración mejorada
-lambda_handler = Mangum(
-    app, 
-    lifespan="off",
-    api_gateway_base_path=f"/{STAGE}" if STAGE else None
-)
+# Crear handler para Lambda usando Mangum con configuración simplificada
+lambda_handler = Mangum(app, lifespan="off")
