@@ -11,14 +11,14 @@ RUN yum update -y && yum install -y \
 COPY requirements.txt ${LAMBDA_TASK_ROOT}
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Crear directorio para modelos temporales
-RUN mkdir -p /tmp
+# Crear directorio para el modelo
+RUN mkdir -p ${LAMBDA_TASK_ROOT}/model
 
 # Copiar el código de la aplicación
 COPY app.py ${LAMBDA_TASK_ROOT}
 
-# Establecer permisos para el directorio tmp
-RUN chmod 755 /tmp
+# Copiar el modelo ONNX (descargado por la pipeline)
+COPY densenet121_Opset17.onnx ${LAMBDA_TASK_ROOT}/model/
 
 # Comando para ejecutar la función Lambda
 CMD ["app.lambda_handler"]
