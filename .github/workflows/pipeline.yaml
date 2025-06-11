@@ -155,6 +155,9 @@ jobs:
           echo "Modelo descargado exitosamente"
           ls -l /tmp/densenet121_Opset17.onnx
           
+          # Copiar el modelo a la carpeta de la función
+          cp /tmp/densenet121_Opset17.onnx densenet_function/
+
       - name: Run tests
         env:
           AWS_REGION: ${{ env.TESTING_REGION }}
@@ -188,9 +191,32 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Download model from bucket
+      - name: Download model from ECR
+        env:
+          AWS_REGION: ${{ env.TESTING_REGION }}
+          STAGE: ${{ env.STAGE }}
+          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
         run: |
-          aws s3 cp s3://${TEST_DATA_BUCKET}/models/densenet121_Opset17.onnx densenet_function/
+          # Asegurarse que el directorio /tmp existe y tenemos permisos
+          sudo mkdir -p /tmp
+          sudo chmod 777 /tmp
+          
+          # Ejecutar script de descarga del modelo
+          echo "Descargando modelo desde ECR..."
+          python scripts/download_model.py
+          
+          # Verificar que el modelo se descargó correctamente
+          if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
+            echo "Error: El modelo no se descargó correctamente"
+            exit 1
+          fi
+          
+          echo "Modelo descargado exitosamente"
+          ls -l /tmp/densenet121_Opset17.onnx
+          
+          # Copiar el modelo a la carpeta de la función
+          cp /tmp/densenet121_Opset17.onnx densenet_function/
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -242,9 +268,32 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Download model from bucket
+      - name: Download model from ECR
+        env:
+          AWS_REGION: ${{ env.PROD_REGION }}
+          STAGE: ${{ env.STAGE }}
+          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
         run: |
-          aws s3 cp s3://${TEST_DATA_BUCKET}/models/densenet121_Opset17.onnx densenet_function/
+          # Asegurarse que el directorio /tmp existe y tenemos permisos
+          sudo mkdir -p /tmp
+          sudo chmod 777 /tmp
+          
+          # Ejecutar script de descarga del modelo
+          echo "Descargando modelo desde ECR..."
+          python scripts/download_model.py
+          
+          # Verificar que el modelo se descargó correctamente
+          if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
+            echo "Error: El modelo no se descargó correctamente"
+            exit 1
+          fi
+          
+          echo "Modelo descargado exitosamente"
+          ls -l /tmp/densenet121_Opset17.onnx
+          
+          # Copiar el modelo a la carpeta de la función
+          cp /tmp/densenet121_Opset17.onnx densenet_function/
 
       - name: Login to Amazon ECR
         id: login-ecr
