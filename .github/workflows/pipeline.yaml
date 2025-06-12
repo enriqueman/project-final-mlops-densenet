@@ -166,20 +166,25 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Create application ECR repository if needed
+      - name: Check and create application ECR repository if needed
         env:
           AWS_REGION: ${{ env.TESTING_REGION }}
           REPOSITORY_NAME: ${{ env.TESTING_APP_REPOSITORY }}
         run: |
-          aws ecr describe-repositories --repository-names $REPOSITORY_NAME --region $AWS_REGION 2>/dev/null || {
-            echo "Creando repositorio ECR para la aplicación..."
+          echo "Verificando si el repositorio ECR existe..."
+          if aws ecr describe-repositories --repository-names $REPOSITORY_NAME --region $AWS_REGION 2>/dev/null; then
+            echo "✅ Repositorio ECR ya existe: $REPOSITORY_NAME"
+            echo "ECR_REPO_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "📦 Creando repositorio ECR para la aplicación..."
             aws ecr create-repository \
               --repository-name $REPOSITORY_NAME \
               --region $AWS_REGION \
               --image-scanning-configuration scanOnPush=true \
               --image-tag-mutability MUTABLE
-            echo "Repositorio ECR creado: $REPOSITORY_NAME"
-          }
+            echo "✅ Repositorio ECR creado: $REPOSITORY_NAME"
+            echo "ECR_REPO_EXISTS=false" >> $GITHUB_ENV
+          fi
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -219,6 +224,16 @@ jobs:
           INSTANCE_TYPE: t3.medium
         run: |
           echo "Desplegando infraestructura EC2 a entorno dev..."
+          
+          # Determinar si necesitamos crear el repositorio ECR en CloudFormation
+          CREATE_ECR_REPO="false"
+          if [ "${{ env.ECR_REPO_EXISTS }}" = "false" ]; then
+            CREATE_ECR_REPO="true"
+            echo "Configurando CloudFormation para crear repositorio ECR"
+          else
+            echo "Usando repositorio ECR existente"
+          fi
+          
           sam deploy \
             --stack-name ${TESTING_STACK_NAME} \
             --template-file ${SAM_TEMPLATE} \
@@ -230,6 +245,7 @@ jobs:
             --parameter-overrides \
               Stage=dev \
               InstanceType=${INSTANCE_TYPE} \
+              CreateECRRepo=${CREATE_ECR_REPO} \
             --debug
 
       - name: Wait for deployment and verify
@@ -343,20 +359,25 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Create application ECR repository if needed
+      - name: Check and create application ECR repository if needed
         env:
           AWS_REGION: ${{ env.PROD_REGION }}
           REPOSITORY_NAME: ${{ env.PROD_APP_REPOSITORY }}
         run: |
-          aws ecr describe-repositories --repository-names $REPOSITORY_NAME --region $AWS_REGION 2>/dev/null || {
-            echo "Creando repositorio ECR para la aplicación..."
+          echo "Verificando si el repositorio ECR existe..."
+          if aws ecr describe-repositories --repository-names $REPOSITORY_NAME --region $AWS_REGION 2>/dev/null; then
+            echo "✅ Repositorio ECR ya existe: $REPOSITORY_NAME"
+            echo "ECR_REPO_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "📦 Creando repositorio ECR para la aplicación..."
             aws ecr create-repository \
               --repository-name $REPOSITORY_NAME \
               --region $AWS_REGION \
               --image-scanning-configuration scanOnPush=true \
               --image-tag-mutability MUTABLE
-            echo "Repositorio ECR creado: $REPOSITORY_NAME"
-          }
+            echo "✅ Repositorio ECR creado: $REPOSITORY_NAME"
+            echo "ECR_REPO_EXISTS=false" >> $GITHUB_ENV
+          fi
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -384,6 +405,16 @@ jobs:
           INSTANCE_TYPE: t3.large
         run: |
           echo "Desplegando infraestructura EC2 a entorno prod..."
+          
+          # Determinar si necesitamos crear el repositorio ECR en CloudFormation
+          CREATE_ECR_REPO="false"
+          if [ "${{ env.ECR_REPO_EXISTS }}" = "false" ]; then
+            CREATE_ECR_REPO="true"
+            echo "Configurando CloudFormation para crear repositorio ECR"
+          else
+            echo "Usando repositorio ECR existente"
+          fi
+          
           sam deploy \
             --stack-name ${PROD_STACK_NAME} \
             --template-file ${SAM_TEMPLATE} \
@@ -395,6 +426,7 @@ jobs:
             --parameter-overrides \
               Stage=prod \
               InstanceType=${INSTANCE_TYPE} \
+              CreateECRRepo=${CREATE_ECR_REPO} \
             --debug
 
       - name: Verify production deployment

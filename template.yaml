@@ -4,6 +4,7 @@ Description: 'DenseNet121 ONNX Inference API with FastAPI on EC2'
 
 Conditions:
   IsProd: !Equals [!Ref Stage, 'prod']
+  CreateECRRepository: !Equals [!Ref CreateECRRepo, 'true']
 
 Parameters:
   Stage:
@@ -22,6 +23,12 @@ Parameters:
     Type: String
     Default: ""
     Description: EC2 Key Pair for SSH access (optional)
+  
+  CreateECRRepo:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Whether to create ECR repository (false if created externally)
 
 Resources:
   # VPC para la aplicación
@@ -175,9 +182,10 @@ Resources:
       Roles:
         - !Ref DenseNetEC2Role
 
-  # ECR Repository para la aplicación
+  # ECR Repository para la aplicación (solo si no existe)
   DenseNetECRRepository:
     Type: AWS::ECR::Repository
+    Condition: CreateECRRepository
     Properties:
       RepositoryName: !Sub 'densenet121-app-${Stage}'
       ImageTagMutability: MUTABLE
@@ -510,7 +518,10 @@ Outputs:
 
   ECRRepositoryUri:
     Description: 'ECR Repository URI for Application'
-    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${DenseNetECRRepository}'
+    Value: !If 
+      - CreateECRRepository
+      - !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${DenseNetECRRepository}'
+      - !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/densenet121-app-${Stage}'
     Export:
       Name: !Sub '${AWS::StackName}-ECRUri'
 
