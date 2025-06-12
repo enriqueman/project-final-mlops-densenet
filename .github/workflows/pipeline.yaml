@@ -121,17 +121,7 @@ jobs:
           # Verify Docker installation
           docker --version
 
-      - name: Inspect model image
-        env:
-          AWS_REGION: ${{ env.TESTING_REGION }}
-          STAGE: ${{ env.STAGE }}
-          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
-          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
-        run: |
-          echo "Inspeccionando imagen del modelo..."
-          python scripts/inspect_model_image.py
-          
-      - name: Download model from ECR
+      - name: Download model from ECR for tests
         env:
           AWS_REGION: ${{ env.TESTING_REGION }}
           STAGE: ${{ env.STAGE }}
@@ -143,7 +133,7 @@ jobs:
           sudo chmod 777 /tmp
           
           # Ejecutar script de descarga del modelo
-          echo "Descargando modelo desde ECR..."
+          echo "Descargando modelo desde ECR para tests..."
           python scripts/download_model.py
           
           # Verificar que el modelo se descargó correctamente
@@ -152,11 +142,8 @@ jobs:
             exit 1
           fi
           
-          echo "Modelo descargado exitosamente"
+          echo "Modelo descargado exitosamente para tests"
           ls -l /tmp/densenet121_Opset17.onnx
-          
-          # Copiar el modelo a la carpeta de la función
-          cp /tmp/densenet121_Opset17.onnx densenet_function/
 
       - name: Run tests
         env:
@@ -201,19 +188,19 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Download model from ECR
+      - name: Download model from ECR for build
         env:
           AWS_REGION: ${{ env.TESTING_REGION }}
           STAGE: ${{ env.STAGE }}
           AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
           MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
         run: |
-          # Asegurarse que el directorio /tmp existe y tenemos permisos
+          # Asegurarse que el directorio existe
           sudo mkdir -p /tmp
           sudo chmod 777 /tmp
           
           # Ejecutar script de descarga del modelo
-          echo "Descargando modelo desde ECR..."
+          echo "Descargando modelo desde ECR para build..."
           python scripts/download_model.py
           
           # Verificar que el modelo se descargó correctamente
@@ -225,8 +212,17 @@ jobs:
           echo "Modelo descargado exitosamente"
           ls -l /tmp/densenet121_Opset17.onnx
           
-          # Copiar el modelo a la carpeta de la función
-          cp /tmp/densenet121_Opset17.onnx densenet_function/
+          # Copiar el modelo a la carpeta de la función para el build
+          cp /tmp/densenet121_Opset17.onnx densenet_function/densenet121_Opset17.onnx
+          
+          # Verificar que se copió correctamente
+          if [ ! -f "densenet_function/densenet121_Opset17.onnx" ]; then
+            echo "Error: El modelo no se copió a la carpeta de la función"
+            exit 1
+          fi
+          
+          echo "Modelo copiado a la carpeta de la función exitosamente"
+          ls -l densenet_function/densenet121_Opset17.onnx
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -239,15 +235,42 @@ jobs:
           IMAGE_TAG: latest
         run: |
           cd densenet_function
+          echo "Construyendo imagen Docker..."
           docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+          
+          # Verificar que el modelo está en la imagen
+          echo "Verificando que el modelo está en la imagen..."
+          docker run --rm $ECR_REPOSITORY:$IMAGE_TAG ls -la /var/task/model/
+          
+          echo "Subiendo imagen a ECR..."
           docker push $ECR_REPOSITORY:$IMAGE_TAG
+          
+          echo "✅ Imagen construida y subida exitosamente"
 
       - uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
 
+      - name: Build SAM application
+        run: |
+          echo "Construyendo aplicación SAM..."
+          sam build --debug
+          
+          # Verificar que el modelo está incluido en el build
+          echo "Verificando modelo en el build..."
+          if [ -f ".aws-sam/build/DenseNetInferenceFunction/model/densenet121_Opset17.onnx" ]; then
+            echo "✅ Modelo encontrado en el build SAM"
+            ls -l .aws-sam/build/DenseNetInferenceFunction/model/
+          else
+            echo "❌ Modelo NO encontrado en el build SAM"
+            echo "Contenido del directorio build:"
+            find .aws-sam/build/DenseNetInferenceFunction/ -type f -name "*.onnx" || echo "No se encontraron archivos .onnx"
+            exit 1
+          fi
+
       - name: Deploy to dev
         run: |
+          echo "Desplegando a entorno dev..."
           sam deploy \
             --stack-name ${TESTING_STACK_NAME} \
             --template-file ${SAM_TEMPLATE} \
@@ -256,7 +279,27 @@ jobs:
             --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
             --no-fail-on-empty-changeset \
             --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE} \
-            --parameter-overrides Stage=dev
+            --parameter-overrides Stage=dev \
+            --debug
+
+      - name: Verify deployment
+        run: |
+          echo "Verificando deployment..."
+          # Obtener la URL de la API
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name ${TESTING_STACK_NAME} \
+            --region ${TESTING_REGION} \
+            --query 'Stacks[0].Outputs[?OutputKey==`DenseNetApiUrl`].OutputValue' \
+            --output text)
+          
+          echo "API URL: $API_URL"
+          
+          # Esperar un momento para que la función esté lista
+          sleep 30
+          
+          # Probar el health endpoint
+          echo "Probando health endpoint..."
+          curl -f "$API_URL/health" || echo "Health check falló, pero continuamos"
 
   build-and-deploy-prod:
     if: github.ref == 'refs/heads/prod'
@@ -287,19 +330,19 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Download model from ECR
+      - name: Download model from ECR for build
         env:
           AWS_REGION: ${{ env.PROD_REGION }}
           STAGE: ${{ env.STAGE }}
           AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
           MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
         run: |
-          # Asegurarse que el directorio /tmp existe y tenemos permisos
+          # Asegurarse que el directorio existe
           sudo mkdir -p /tmp
           sudo chmod 777 /tmp
           
           # Ejecutar script de descarga del modelo
-          echo "Descargando modelo desde ECR..."
+          echo "Descargando modelo desde ECR para build..."
           python scripts/download_model.py
           
           # Verificar que el modelo se descargó correctamente
@@ -311,8 +354,17 @@ jobs:
           echo "Modelo descargado exitosamente"
           ls -l /tmp/densenet121_Opset17.onnx
           
-          # Copiar el modelo a la carpeta de la función
-          cp /tmp/densenet121_Opset17.onnx densenet_function/
+          # Copiar el modelo a la carpeta de la función para el build
+          cp /tmp/densenet121_Opset17.onnx densenet_function/densenet121_Opset17.onnx
+          
+          # Verificar que se copió correctamente
+          if [ ! -f "densenet_function/densenet121_Opset17.onnx" ]; then
+            echo "Error: El modelo no se copió a la carpeta de la función"
+            exit 1
+          fi
+          
+          echo "Modelo copiado a la carpeta de la función exitosamente"
+          ls -l densenet_function/densenet121_Opset17.onnx
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -325,15 +377,42 @@ jobs:
           IMAGE_TAG: latest
         run: |
           cd densenet_function
+          echo "Construyendo imagen Docker para producción..."
           docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+          
+          # Verificar que el modelo está en la imagen
+          echo "Verificando que el modelo está en la imagen..."
+          docker run --rm $ECR_REPOSITORY:$IMAGE_TAG ls -la /var/task/model/
+          
+          echo "Subiendo imagen a ECR..."
           docker push $ECR_REPOSITORY:$IMAGE_TAG
+          
+          echo "✅ Imagen construida y subida exitosamente"
 
       - uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
 
+      - name: Build SAM application
+        run: |
+          echo "Construyendo aplicación SAM para producción..."
+          sam build --debug
+          
+          # Verificar que el modelo está incluido en el build
+          echo "Verificando modelo en el build..."
+          if [ -f ".aws-sam/build/DenseNetInferenceFunction/model/densenet121_Opset17.onnx" ]; then
+            echo "✅ Modelo encontrado en el build SAM"
+            ls -l .aws-sam/build/DenseNetInferenceFunction/model/
+          else
+            echo "❌ Modelo NO encontrado en el build SAM"
+            echo "Contenido del directorio build:"
+            find .aws-sam/build/DenseNetInferenceFunction/ -type f -name "*.onnx" || echo "No se encontraron archivos .onnx"
+            exit 1
+          fi
+
       - name: Deploy to production
         run: |
+          echo "Desplegando a entorno prod..."
           sam deploy \
             --stack-name ${PROD_STACK_NAME} \
             --template-file ${SAM_TEMPLATE} \
@@ -342,4 +421,24 @@ jobs:
             --s3-bucket ${PROD_ARTIFACTS_BUCKET} \
             --no-fail-on-empty-changeset \
             --role-arn ${PROD_CLOUDFORMATION_EXECUTION_ROLE} \
-            --parameter-overrides Stage=prod
+            --parameter-overrides Stage=prod \
+            --debug
+
+      - name: Verify production deployment
+        run: |
+          echo "Verificando deployment en producción..."
+          # Obtener la URL de la API
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name ${PROD_STACK_NAME} \
+            --region ${PROD_REGION} \
+            --query 'Stacks[0].Outputs[?OutputKey==`DenseNetApiUrl`].OutputValue' \
+            --output text)
+          
+          echo "Production API URL: $API_URL"
+          
+          # Esperar un momento para que la función esté lista
+          sleep 30
+          
+          # Probar el health endpoint
+          echo "Probando health endpoint en producción..."
+          curl -f "$API_URL/health" || echo "Health check falló, pero continuamos"

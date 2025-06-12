@@ -8,7 +8,6 @@ from PIL import Image
 import onnxruntime as ort
 from fastapi import FastAPI, HTTPException, File, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict
 from mangum import Mangum
 from typing import List, Optional
@@ -37,11 +36,41 @@ def load_model():
     global session, input_name, input_shape, output_name
     
     try:
+        # Verificar directorios disponibles
+        logger.info("=== DEBUG: Verificando estructura de directorios ===")
+        logger.info(f"Contenido de /var/task: {os.listdir('/var/task') if os.path.exists('/var/task') else 'No existe'}")
+        
+        if os.path.exists('/var/task/model'):
+            logger.info(f"Contenido de /var/task/model: {os.listdir('/var/task/model')}")
+        else:
+            logger.error("Directorio /var/task/model no existe")
+            return False
+        
         # Verificar si el modelo existe
         if not os.path.exists(MODEL_PATH):
             logger.error(f"Modelo no encontrado en: {MODEL_PATH}")
-            logger.info(f"Contenido de /var/task: {os.listdir('/var/task') if os.path.exists('/var/task') else 'No existe'}")
-            logger.info(f"Contenido de /var/task/model: {os.listdir('/var/task/model') if os.path.exists('/var/task/model') else 'No existe'}")
+            
+            # Buscar archivos .onnx en todo el sistema
+            logger.info("Buscando archivos .onnx en el contenedor...")
+            import subprocess
+            try:
+                result = subprocess.run(['find', '/var', '-name', '*.onnx'], 
+                                      capture_output=True, text=True, timeout=10)
+                if result.stdout:
+                    logger.info(f"Archivos .onnx encontrados: {result.stdout}")
+                else:
+                    logger.error("No se encontraron archivos .onnx en el contenedor")
+            except Exception as e:
+                logger.error(f"Error buscando archivos: {e}")
+            
+            return False
+        
+        # Verificar tamaño del archivo
+        file_size = os.path.getsize(MODEL_PATH)
+        logger.info(f"Tamaño del modelo: {file_size / (1024*1024):.2f} MB")
+        
+        if file_size < 1000:  # Muy pequeño, probablemente no es el modelo real
+            logger.error(f"El archivo del modelo es muy pequeño: {file_size} bytes")
             return False
         
         # Cargar el modelo
@@ -59,22 +88,19 @@ def load_model():
         
     except Exception as e:
         logger.error(f"Error cargando modelo: {str(e)}")
+        import traceback
+        logger.error(f"Traceback completo: {traceback.format_exc()}")
         session = None
         return False
 
-# Intentar cargar el modelo al inicio
-model_loaded = load_model()
-
-# Modelos Pydantic con configuración para evitar warnings
+# Modelos Pydantic
 class ImageRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
-    
     image: str  # base64 encoded image
     top_k: Optional[int] = 5
 
 class PredictionResult(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
-    
     rank: int
     class_id: int
     probability: float
@@ -82,7 +108,6 @@ class PredictionResult(BaseModel):
 
 class InferenceResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
-    
     success: bool
     predictions: List[PredictionResult]
     inference_time_ms: float
@@ -90,17 +115,20 @@ class InferenceResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
-    
     status: str
     model_loaded: bool
     model_info: Optional[dict] = None
     debug_info: Optional[dict] = None
+
+# Configurar root_path basado en el stage
+root_path = f"/{STAGE}" if STAGE and STAGE != "prod" else ""
 
 # Crear FastAPI app
 app = FastAPI(
     title="DenseNet121 ONNX Inference API",
     description="API para inferencia con modelo DenseNet121 en AWS Lambda",
     version="1.0.0",
+    root_path=root_path,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json"
@@ -160,12 +188,13 @@ async def health_check():
         "working_directory": os.getcwd(),
         "lambda_task_root": os.environ.get('LAMBDA_TASK_ROOT', 'Not set'),
         "var_task_contents": os.listdir('/var/task') if os.path.exists('/var/task') else 'No existe',
-        "model_dir_contents": os.listdir('/var/task/model') if os.path.exists('/var/task/model') else 'No existe'
+        "model_dir_contents": os.listdir('/var/task/model') if os.path.exists('/var/task/model') else 'No existe',
+        "model_file_size": os.path.getsize(MODEL_PATH) if os.path.exists(MODEL_PATH) else 0
     }
     
     # Intentar cargar el modelo si no está cargado
     if session is None:
-        logger.info("Intentando recargar modelo...")
+        logger.info("Intentando cargar modelo...")
         model_loaded = load_model()
         debug_info["reload_attempt"] = model_loaded
     
@@ -247,6 +276,24 @@ async def predict_image(request: ImageRequest):
         logger.error(f"Error en predicción: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
+@app.get("/model-info")
+async def get_model_info():
+    """Información detallada del modelo"""
+    if session is None:
+        raise HTTPException(status_code=500, detail="Modelo no está cargado")
+    
+    return {
+        "name": "DenseNet121",
+        "framework": "ONNX",
+        "input_shape": input_shape,
+        "input_name": input_name,
+        "output_name": output_name,
+        "parameters": 7978856,
+        "providers": session.get_providers() if session else [],
+        "opset_version": 17,
+        "model_file_size": os.path.getsize(MODEL_PATH) if os.path.exists(MODEL_PATH) else 0
+    }
+
 # Verificar que python-multipart está disponible antes de crear el endpoint
 try:
     import multipart
@@ -293,23 +340,21 @@ try:
 except ImportError:
     logger.warning("python-multipart no está disponible, endpoint predict-file deshabilitado")
 
-@app.get("/model-info")
-async def get_model_info():
-    """Información detallada del modelo"""
-    if session is None:
-        raise HTTPException(status_code=500, detail="Modelo no está cargado")
-    
-    return {
-        "name": "DenseNet121",
-        "framework": "ONNX",
-        "input_shape": input_shape,
-        "input_name": input_name,
-        "output_name": output_name,
-        "parameters": 7978856,
-        "providers": session.get_providers() if session else [],
-        "opset_version": 17,
-        "model_file_size": os.path.getsize(MODEL_PATH) if os.path.exists(MODEL_PATH) else 0
-    }
+# Intentar cargar el modelo al inicio
+logger.info("=== INICIALIZANDO APLICACIÓN ===")
+model_loaded = load_model()
+if model_loaded:
+    logger.info("✅ Modelo cargado exitosamente al inicio")
+else:
+    logger.error("❌ Error cargando modelo al inicio")
 
-# Crear handler para Lambda
-lambda_handler = Mangum(app, lifespan="off", api_gateway_base_path=None)
+# Crear handler para Lambda con configuración específica
+lambda_handler = Mangum(
+    app, 
+    lifespan="off", 
+    api_gateway_base_path=f"/{STAGE}" if STAGE and STAGE != "prod" else None,
+    text_mime_types=[
+        "application/json",
+        "application/javascript", 
+        "application/xml",
+        "application/vnd.api+json",
