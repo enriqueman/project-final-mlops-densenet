@@ -21,17 +21,8 @@ RUN mkdir -p ${LAMBDA_TASK_ROOT}/model
 # Copiar el código de la aplicación
 COPY app.py ${LAMBDA_TASK_ROOT}
 
-# IMPORTANTE: Copiar el modelo ONNX desde el directorio local
-# Este archivo debe existir en el directorio de build
+# Copiar el modelo ONNX
 COPY densenet121_Opset17.onnx ${LAMBDA_TASK_ROOT}/model/densenet121_Opset17.onnx
-
-# Verificar que el modelo se copió correctamente
-RUN ls -la ${LAMBDA_TASK_ROOT}/model/ && \
-    echo "Modelo copiado correctamente" && \
-    file ${LAMBDA_TASK_ROOT}/model/densenet121_Opset17.onnx
-
-# Verificar la instalación de python-multipart
-RUN python -c "import multipart; print('python-multipart installed successfully')"
 
 # Comando para ejecutar la función Lambda
 CMD ["app.lambda_handler"]
