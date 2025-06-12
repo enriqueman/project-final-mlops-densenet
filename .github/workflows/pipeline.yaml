@@ -17,6 +17,7 @@ env:
   MODEL_REPOSITORY: densenet121-model-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
   STACK_NAME: densenet-fargate-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
   AWS_REGION: ${{ github.ref == 'refs/heads/prod' && 'us-east-1' || 'us-east-1' }}
+  AWS_ACCOUNT_ID: 471112837636
 
 jobs:
   test:
