@@ -135,6 +135,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install aws-cdk-lib constructs
           npm install -g aws-cdk
           
       - name: Build and push Docker image
@@ -288,6 +289,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install aws-cdk-lib constructs
           npm install -g aws-cdk
           
       - name: Build and push Docker image
