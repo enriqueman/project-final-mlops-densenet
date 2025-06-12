@@ -1,8 +1,7 @@
 FROM python:3.9
 
-# Install required packages for model download
+# Install required packages
 RUN apt-get update && apt-get install -y \
-    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
@@ -12,7 +11,7 @@ COPY ./requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
 # Install additional dependencies needed for model download
-RUN pip install docker boto3
+RUN pip install boto3
 
 # Copy application code
 COPY ./app /code/app
@@ -37,8 +36,17 @@ ENV AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 ENV AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 ENV AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
 
-# Download model during build
-RUN python /code/download_model.py
+# Create startup script that downloads model and starts app
+RUN echo '#!/bin/bash\n\
+set -e\n\
+echo "=== DESCARGANDO MODELO AL INICIO ==="\n\
+python /code/download_model.py\n\
+if [ ! -f "/code/app/model/densenet121_Opset17.onnx" ]; then\n\
+    echo "Error: Modelo no descargado correctamente"\n\
+    exit 1\n\
+fi\n\
+echo "=== INICIANDO APLICACIÓN ==="\n\
+exec uvicorn app.app:app --host 0.0.0.0 --port 80' > /code/start.sh && chmod +x /code/start.sh
 
-# Run the FastAPI application
-CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "80"]
+# Run the startup script
+CMD ["/code/start.sh"]

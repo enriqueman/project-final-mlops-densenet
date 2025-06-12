@@ -12,17 +12,18 @@ env:
   PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:role/cdk-pipeline-deployment-role
   TESTING_REGION: us-east-1
   PROD_REGION: us-east-1
-  TEST_DATA_BUCKET: densenet-test-data-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
-  STAGE: ${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
-  MODEL_REPOSITORY: densenet121-model-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
-  STACK_NAME: densenet-fargate-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
-  AWS_REGION: ${{ github.ref == 'refs/heads/prod' && 'us-east-1' || 'us-east-1' }}
   AWS_ACCOUNT_ID: 471112837636
 
 jobs:
-  test:
-    if: github.event_name == 'push'
+  # ========== DEV ENVIRONMENT ==========
+  test-dev:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
+    env:
+      STAGE: dev
+      TEST_DATA_BUCKET: densenet-test-data-dev
+      MODEL_REPOSITORY: densenet121-model-dev
+      AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@v3
       
@@ -44,7 +45,7 @@ jobs:
           aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
-          role-session-name: testing-session
+          role-session-name: testing-session-dev
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
@@ -72,36 +73,10 @@ jobs:
           "
 
       - name: Generate and upload test data
-        env:
-          AWS_REGION: ${{ env.AWS_REGION }}
-          STAGE: ${{ env.STAGE }}
-          TEST_DATA_BUCKET: ${{ env.TEST_DATA_BUCKET }}
         run: |
           python scripts/generate_test_data.py
-          
-      - name: Install Docker
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ca-certificates curl gnupg
-          sudo install -m 0755 -d /etc/apt/keyrings
-          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-          sudo chmod a+r /etc/apt/keyrings/docker.gpg
-          echo \
-            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-            $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-            sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-          sudo systemctl start docker || true
-          sudo systemctl status docker
-          sudo usermod -aG docker $USER
-          docker --version
 
       - name: Download model from ECR for tests
-        env:
-          AWS_REGION: ${{ env.AWS_REGION }}
-          STAGE: ${{ env.STAGE }}
-          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
         run: |
           sudo mkdir -p /tmp
           sudo chmod 777 /tmp
@@ -115,10 +90,6 @@ jobs:
           ls -l /tmp/densenet121_Opset17.onnx
 
       - name: Run tests
-        env:
-          AWS_REGION: ${{ env.AWS_REGION }}
-          STAGE: ${{ env.STAGE }}
-          TEST_DATA_BUCKET: ${{ env.TEST_DATA_BUCKET }}
         run: |
           if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
             echo "Error: El modelo no existe en /tmp"
@@ -127,9 +98,15 @@ jobs:
           fi
           pytest tests/test_model.py -v
 
-  deploy:
-    needs: [test]
+  deploy-dev:
+    needs: [test-dev]
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
+    env:
+      STAGE: dev
+      MODEL_REPOSITORY: densenet121-model-dev
+      STACK_NAME: densenet-fargate-dev
+      AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@v3
       
@@ -150,7 +127,7 @@ jobs:
           aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
-          role-session-name: deployment-session
+          role-session-name: deployment-session-dev
           role-duration-seconds: 3600
           role-skip-session-tagging: true
           
@@ -161,31 +138,27 @@ jobs:
           npm install -g aws-cdk
           
       - name: Build and push Docker image
-        env:
-          AWS_REGION: ${{ env.AWS_REGION }}
-          STAGE: ${{ env.STAGE }}
-          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
         run: |
           # Login to ECR
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
           
           # Create ECR repository if it doesn't exist
           aws ecr describe-repositories --repository-names app-${{ env.STAGE }} || \
           aws ecr create-repository --repository-name app-${{ env.STAGE }}
           
-          # Build Docker image with build args including AWS credentials
+          # Build Docker image (modelo se descarga en runtime, no en build time)
           docker build -t app:latest \
-            --build-arg AWS_REGION=$AWS_REGION \
-            --build-arg STAGE=$STAGE \
-            --build-arg MODEL_REPOSITORY=$MODEL_REPOSITORY \
+            --build-arg AWS_REGION=${{ env.AWS_REGION }} \
+            --build-arg STAGE=${{ env.STAGE }} \
+            --build-arg MODEL_REPOSITORY=${{ env.MODEL_REPOSITORY }} \
             --build-arg AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
             --build-arg AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
             --build-arg AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
             .
           
           # Tag and push to ECR
-          docker tag app:latest ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/app-${{ env.STAGE }}:latest
-          docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/app-${{ env.STAGE }}:latest
+          docker tag app:latest ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
+          docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
           
       - name: Deploy with CDK
         run: |
@@ -195,4 +168,155 @@ jobs:
             -c region=${{ env.AWS_REGION }} \
             ${{ env.STACK_NAME }}
 
-  
+  # ========== PROD ENVIRONMENT ==========
+  test-prod:
+    if: github.ref == 'refs/heads/prod'
+    runs-on: ubuntu-latest
+    env:
+      STAGE: prod
+      TEST_DATA_BUCKET: densenet-test-data-prod
+      MODEL_REPOSITORY: densenet121-model-prod
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/requirements-test.txt
+          pip install docker boto3 requests Pillow numpy onnxruntime
+          
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
+          role-session-name: testing-session-prod
+          role-duration-seconds: 3600
+          role-skip-session-tagging: true
+
+      - name: Setup test data bucket
+        run: |
+          python -c "
+          import boto3
+          import time
+          s3 = boto3.client('s3')
+          bucket_name = '${{ env.TEST_DATA_BUCKET }}'
+          
+          try:
+              s3.head_bucket(Bucket=bucket_name)
+              print(f'Bucket {bucket_name} ya existe')
+          except:
+              if '${{ env.AWS_REGION }}' == 'us-east-1':
+                  s3.create_bucket(Bucket=bucket_name)
+              else:
+                  s3.create_bucket(
+                      Bucket=bucket_name,
+                      CreateBucketConfiguration={'LocationConstraint': '${{ env.AWS_REGION }}'}
+                  )
+              print(f'Bucket {bucket_name} creado')
+              time.sleep(5)
+          "
+
+      - name: Generate and upload test data
+        run: |
+          python scripts/generate_test_data.py
+
+      - name: Download model from ECR for tests
+        run: |
+          sudo mkdir -p /tmp
+          sudo chmod 777 /tmp
+          echo "Descargando modelo desde ECR para tests..."
+          python scripts/download_model.py
+          if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
+            echo "Error: El modelo no se descargó correctamente"
+            exit 1
+          fi
+          echo "Modelo descargado exitosamente para tests"
+          ls -l /tmp/densenet121_Opset17.onnx
+
+      - name: Run tests
+        run: |
+          if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
+            echo "Error: El modelo no existe en /tmp"
+            ls -la /tmp
+            exit 1
+          fi
+          pytest tests/test_model.py -v
+
+  deploy-prod:
+    needs: [test-prod]
+    if: github.ref == 'refs/heads/prod'
+    runs-on: ubuntu-latest
+    env:
+      STAGE: prod
+      MODEL_REPOSITORY: densenet121-model-prod
+      STACK_NAME: densenet-fargate-prod
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Set up Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
+          role-session-name: deployment-session-prod
+          role-duration-seconds: 3600
+          role-skip-session-tagging: true
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          npm install -g aws-cdk
+          
+      - name: Build and push Docker image
+        run: |
+          # Login to ECR
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+          
+          # Create ECR repository if it doesn't exist
+          aws ecr describe-repositories --repository-names app-${{ env.STAGE }} || \
+          aws ecr create-repository --repository-name app-${{ env.STAGE }}
+          
+          # Build Docker image (modelo se descarga en runtime, no en build time)
+          docker build -t app:latest \
+            --build-arg AWS_REGION=${{ env.AWS_REGION }} \
+            --build-arg STAGE=${{ env.STAGE }} \
+            --build-arg MODEL_REPOSITORY=${{ env.MODEL_REPOSITORY }} \
+            --build-arg AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            --build-arg AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            --build-arg AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
+            .
+          
+          # Tag and push to ECR
+          docker tag app:latest ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
+          docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
+          
+      - name: Deploy with CDK
+        run: |
+          cdk deploy --app="python3 ${PWD}/app.py" \
+            --require-approval=never \
+            -c stage=${{ env.STAGE }} \
+            -c region=${{ env.AWS_REGION }} \
+            ${{ env.STACK_NAME }}
