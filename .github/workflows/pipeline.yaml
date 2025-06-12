@@ -166,34 +166,64 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Check and create application ECR repository if needed
-        env:
-          AWS_REGION: ${{ env.TESTING_REGION }}
-          REPOSITORY_NAME: ${{ env.TESTING_APP_REPOSITORY }}
-        run: |
-          echo "Verificando si el repositorio ECR existe..."
-          if aws ecr describe-repositories --repository-names $REPOSITORY_NAME --region $AWS_REGION 2>/dev/null; then
-            echo "✅ Repositorio ECR ya existe: $REPOSITORY_NAME"
-            echo "ECR_REPO_EXISTS=true" >> $GITHUB_ENV
-          else
-            echo "📦 Creando repositorio ECR para la aplicación..."
-            aws ecr create-repository \
-              --repository-name $REPOSITORY_NAME \
-              --region $AWS_REGION \
-              --image-scanning-configuration scanOnPush=true \
-              --image-tag-mutability MUTABLE
-            echo "✅ Repositorio ECR creado: $REPOSITORY_NAME"
-            echo "ECR_REPO_EXISTS=false" >> $GITHUB_ENV
-          fi
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Get ECR repository URI from CloudFormation
+        env:
+          STACK_NAME: ${{ env.TESTING_STACK_NAME }}
+          AWS_REGION: ${{ env.TESTING_REGION }}
+        run: |
+          # Primero verificar si el stack ya existe
+          if aws cloudformation describe-stacks --stack-name ${STACK_NAME} --region ${AWS_REGION} 2>/dev/null; then
+            echo "Stack ya existe, obteniendo URI del repositorio ECR..."
+            ECR_URI=$(aws cloudformation describe-stacks \
+              --stack-name ${STACK_NAME} \
+              --region ${AWS_REGION} \
+              --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryUri`].OutputValue' \
+              --output text)
+            echo "ECR_REPOSITORY_URI=$ECR_URI" >> $GITHUB_ENV
+            echo "Repositorio ECR existente: $ECR_URI"
+          else
+            echo "Stack no existe aún, se creará en el siguiente paso"
+            echo "ECR_REPOSITORY_URI=" >> $GITHUB_ENV
+          fi
+
+      - name: Deploy infrastructure first (if needed)
+        env:
+          INSTANCE_TYPE: t3.medium
+        run: |
+          echo "Desplegando infraestructura EC2 a entorno dev..."
+          sam deploy \
+            --stack-name ${TESTING_STACK_NAME} \
+            --template-file ${SAM_TEMPLATE} \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --region ${TESTING_REGION} \
+            --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
+            --no-fail-on-empty-changeset \
+            --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE} \
+            --parameter-overrides \
+              Stage=dev \
+              InstanceType=${INSTANCE_TYPE} \
+            --debug
+          
+          # Obtener URI del repositorio ECR después del deployment
+          ECR_URI=$(aws cloudformation describe-stacks \
+            --stack-name ${TESTING_STACK_NAME} \
+            --region ${TESTING_REGION} \
+            --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryUri`].OutputValue' \
+            --output text)
+          echo "ECR_REPOSITORY_URI=$ECR_URI" >> $GITHUB_ENV
+          echo "Repositorio ECR disponible: $ECR_URI"
+
       - name: Build and push application image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.TESTING_APP_REPOSITORY }}
           IMAGE_TAG: latest
           ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
           AWS_REGION: ${{ env.TESTING_REGION }}
@@ -206,47 +236,20 @@ jobs:
             exit 1
           fi
           
-          echo "Construyendo imagen Docker para EC2..."
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          
-          echo "Subiendo imagen a ECR..."
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          
-          echo "✅ Imagen de aplicación construida y subida exitosamente"
-          echo "Imagen: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-
-      - name: Deploy to dev
-        env:
-          INSTANCE_TYPE: t3.medium
-        run: |
-          echo "Desplegando infraestructura EC2 a entorno dev..."
-          
-          # Determinar si necesitamos crear el repositorio ECR en CloudFormation
-          CREATE_ECR_REPO="false"
-          if [ "${{ env.ECR_REPO_EXISTS }}" = "false" ]; then
-            CREATE_ECR_REPO="true"
-            echo "Configurando CloudFormation para crear repositorio ECR"
-          else
-            echo "Usando repositorio ECR existente"
+          # Usar la URI del repositorio ECR desde CloudFormation
+          if [ -z "$ECR_REPOSITORY_URI" ]; then
+            echo "Error: No se pudo obtener la URI del repositorio ECR"
+            exit 1
           fi
           
-          sam deploy \
-            --stack-name ${TESTING_STACK_NAME} \
-            --template-file ${SAM_TEMPLATE} \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --region ${TESTING_REGION} \
-            --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
-            --no-fail-on-empty-changeset \
-            --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE} \
-            --parameter-overrides \
-              Stage=dev \
-              InstanceType=${INSTANCE_TYPE} \
-              CreateECRRepo=${CREATE_ECR_REPO} \
-            --debug
+          echo "Construyendo imagen Docker para EC2..."
+          docker build -t $ECR_REPOSITORY_URI:$IMAGE_TAG .
+          
+          echo "Subiendo imagen a ECR..."
+          docker push $ECR_REPOSITORY_URI:$IMAGE_TAG
+          
+          echo "✅ Imagen de aplicación construida y subida exitosamente"
+          echo "Imagen: $ECR_REPOSITORY_URI:$IMAGE_TAG"
 
       - name: Wait for deployment and verify
         env:
@@ -359,62 +362,31 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Check and create application ECR repository if needed
+      - name: Get ECR repository URI from CloudFormation
         env:
+          STACK_NAME: ${{ env.PROD_STACK_NAME }}
           AWS_REGION: ${{ env.PROD_REGION }}
-          REPOSITORY_NAME: ${{ env.PROD_APP_REPOSITORY }}
         run: |
-          echo "Verificando si el repositorio ECR existe..."
-          if aws ecr describe-repositories --repository-names $REPOSITORY_NAME --region $AWS_REGION 2>/dev/null; then
-            echo "✅ Repositorio ECR ya existe: $REPOSITORY_NAME"
-            echo "ECR_REPO_EXISTS=true" >> $GITHUB_ENV
+          # Primero verificar si el stack ya existe
+          if aws cloudformation describe-stacks --stack-name ${STACK_NAME} --region ${AWS_REGION} 2>/dev/null; then
+            echo "Stack ya existe, obteniendo URI del repositorio ECR..."
+            ECR_URI=$(aws cloudformation describe-stacks \
+              --stack-name ${STACK_NAME} \
+              --region ${AWS_REGION} \
+              --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryUri`].OutputValue' \
+              --output text)
+            echo "ECR_REPOSITORY_URI=$ECR_URI" >> $GITHUB_ENV
+            echo "Repositorio ECR existente: $ECR_URI"
           else
-            echo "📦 Creando repositorio ECR para la aplicación..."
-            aws ecr create-repository \
-              --repository-name $REPOSITORY_NAME \
-              --region $AWS_REGION \
-              --image-scanning-configuration scanOnPush=true \
-              --image-tag-mutability MUTABLE
-            echo "✅ Repositorio ECR creado: $REPOSITORY_NAME"
-            echo "ECR_REPO_EXISTS=false" >> $GITHUB_ENV
+            echo "Stack no existe aún, se creará en el siguiente paso"
+            echo "ECR_REPOSITORY_URI=" >> $GITHUB_ENV
           fi
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push application image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.PROD_APP_REPOSITORY }}
-          IMAGE_TAG: latest
-        run: |
-          cd ec2_app
-          echo "Construyendo imagen Docker para producción..."
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          echo "Subiendo imagen a ECR..."
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "✅ Imagen de aplicación construida y subida exitosamente"
-
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-
-      - name: Deploy to production
+      - name: Deploy infrastructure first (if needed)
         env:
           INSTANCE_TYPE: t3.large
         run: |
           echo "Desplegando infraestructura EC2 a entorno prod..."
-          
-          # Determinar si necesitamos crear el repositorio ECR en CloudFormation
-          CREATE_ECR_REPO="false"
-          if [ "${{ env.ECR_REPO_EXISTS }}" = "false" ]; then
-            CREATE_ECR_REPO="true"
-            echo "Configurando CloudFormation para crear repositorio ECR"
-          else
-            echo "Usando repositorio ECR existente"
-          fi
-          
           sam deploy \
             --stack-name ${PROD_STACK_NAME} \
             --template-file ${SAM_TEMPLATE} \
@@ -426,8 +398,35 @@ jobs:
             --parameter-overrides \
               Stage=prod \
               InstanceType=${INSTANCE_TYPE} \
-              CreateECRRepo=${CREATE_ECR_REPO} \
             --debug
+          
+          # Obtener URI del repositorio ECR después del deployment
+          ECR_URI=$(aws cloudformation describe-stacks \
+            --stack-name ${PROD_STACK_NAME} \
+            --region ${PROD_REGION} \
+            --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryUri`].OutputValue' \
+            --output text)
+          echo "ECR_REPOSITORY_URI=$ECR_URI" >> $GITHUB_ENV
+          echo "Repositorio ECR disponible: $ECR_URI"
+
+      - name: Build and push application image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: latest
+        run: |
+          cd ec2_app
+          
+          # Usar la URI del repositorio ECR desde CloudFormation
+          if [ -z "$ECR_REPOSITORY_URI" ]; then
+            echo "Error: No se pudo obtener la URI del repositorio ECR"
+            exit 1
+          fi
+          
+          echo "Construyendo imagen Docker para producción..."
+          docker build -t $ECR_REPOSITORY_URI:$IMAGE_TAG .
+          echo "Subiendo imagen a ECR..."
+          docker push $ECR_REPOSITORY_URI:$IMAGE_TAG
+          echo "✅ Imagen de aplicación construida y subida exitosamente"
 
       - name: Verify production deployment
         env:
