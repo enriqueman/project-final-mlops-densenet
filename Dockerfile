@@ -11,6 +11,9 @@ WORKDIR /code
 COPY ./requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
+# Install additional dependencies needed for model download
+RUN pip install docker boto3
+
 # Copy application code
 COPY ./app /code/app
 COPY ./scripts/download_model.py /code/download_model.py
@@ -19,8 +22,13 @@ COPY ./scripts/download_model.py /code/download_model.py
 RUN mkdir -p /code/app/model
 
 # Set environment variables
+ARG AWS_REGION
+ARG STAGE
+ARG MODEL_REPOSITORY
+ENV AWS_DEFAULT_REGION=${AWS_REGION}
+ENV STAGE=${STAGE}
+ENV MODEL_REPOSITORY=${MODEL_REPOSITORY}
 ENV MODEL_PATH=/code/app/model/densenet121_Opset17.onnx
-ENV AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
 
 # Download model during build
 RUN python /code/download_model.py

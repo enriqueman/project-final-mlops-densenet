@@ -169,11 +169,16 @@ jobs:
           # Login to ECR
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
           
-          # Build Docker image
+          # Create ECR repository if it doesn't exist
+          aws ecr describe-repositories --repository-names app-${{ env.STAGE }} || \
+          aws ecr create-repository --repository-name app-${{ env.STAGE }}
+          
+          # Build Docker image with build args
           docker build -t app:latest \
             --build-arg AWS_REGION=$AWS_REGION \
             --build-arg STAGE=$STAGE \
-            --build-arg MODEL_REPOSITORY=$MODEL_REPOSITORY .
+            --build-arg MODEL_REPOSITORY=$MODEL_REPOSITORY \
+            .
           
           # Tag and push to ECR
           docker tag app:latest ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/app-${{ env.STAGE }}:latest
