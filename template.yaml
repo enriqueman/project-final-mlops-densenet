@@ -50,8 +50,8 @@ Resources:
       VpcId: !Ref DenseNetVPC
       InternetGatewayId: !Ref DenseNetInternetGateway
 
-  # Public Subnet
-  DenseNetPublicSubnet:
+  # Public Subnet 1
+  DenseNetPublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref DenseNetVPC
@@ -60,7 +60,19 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub 'densenet-public-subnet-${Stage}'
+          Value: !Sub 'densenet-public-subnet-1-${Stage}'
+
+  # Public Subnet 2
+  DenseNetPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DenseNetVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-public-subnet-2-${Stage}'
 
   # Route Table
   DenseNetRouteTable:
@@ -80,11 +92,18 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref DenseNetInternetGateway
 
-  # Associate Route Table with Subnet
-  DenseNetSubnetRouteTableAssociation:
+  # Associate Route Table with Subnet 1
+  DenseNetSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref DenseNetPublicSubnet
+      SubnetId: !Ref DenseNetPublicSubnet1
+      RouteTableId: !Ref DenseNetRouteTable
+
+  # Associate Route Table with Subnet 2
+  DenseNetSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DenseNetPublicSubnet2
       RouteTableId: !Ref DenseNetRouteTable
 
   # Security Group para la instancia EC2
@@ -361,7 +380,8 @@ Resources:
     Properties:
       AutoScalingGroupName: !Sub 'densenet-asg-${Stage}'
       VPCZoneIdentifier:
-        - !Ref DenseNetPublicSubnet
+        - !Ref DenseNetPublicSubnet1
+        - !Ref DenseNetPublicSubnet2
       LaunchTemplate:
         LaunchTemplateId: !Ref DenseNetLaunchTemplate
         Version: !GetAtt DenseNetLaunchTemplate.LatestVersionNumber
@@ -388,7 +408,8 @@ Resources:
       Scheme: internet-facing
       Type: application
       Subnets:
-        - !Ref DenseNetPublicSubnet
+        - !Ref DenseNetPublicSubnet1
+        - !Ref DenseNetPublicSubnet2
       SecurityGroups:
         - !Ref DenseNetALBSecurityGroup
       Tags:
