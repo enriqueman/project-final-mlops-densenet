@@ -264,18 +264,6 @@ jobs:
             --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE} \
             --parameter-overrides Stage=dev \
             --debug
-        run: |
-          echo "Desplegando a entorno dev..."
-          sam deploy \
-            --stack-name ${TESTING_STACK_NAME} \
-            --template-file ${SAM_TEMPLATE} \
-            --capabilities CAPABILITY_IAM \
-            --region ${TESTING_REGION} \
-            --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
-            --no-fail-on-empty-changeset \
-            --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE} \
-            --parameter-overrides Stage=dev \
-            --debug
 
       - name: Verify deployment
         run: |
@@ -401,18 +389,6 @@ jobs:
             --role-arn ${PROD_CLOUDFORMATION_EXECUTION_ROLE} \
             --parameter-overrides Stage=prod \
             --debug
-        run: |
-          echo "Desplegando a entorno prod..."
-          sam deploy \
-            --stack-name ${PROD_STACK_NAME} \
-            --template-file ${SAM_TEMPLATE} \
-            --capabilities CAPABILITY_IAM \
-            --region ${PROD_REGION} \
-            --s3-bucket ${PROD_ARTIFACTS_BUCKET} \
-            --no-fail-on-empty-changeset \
-            --role-arn ${PROD_CLOUDFORMATION_EXECUTION_ROLE} \
-            --parameter-overrides Stage=prod \
-            --debug
 
       - name: Verify production deployment
         run: |
@@ -432,4 +408,3 @@ jobs:
           # Probar el health endpoint
           echo "Probando health endpoint en producción..."
           curl -f "$API_URL/health" || echo "Health check falló, pero continuamos"
-          
