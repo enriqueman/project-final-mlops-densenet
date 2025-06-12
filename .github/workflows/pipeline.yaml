@@ -432,3 +432,4 @@ jobs:
           # Probar el health endpoint
           echo "Probando health endpoint en producción..."
           curl -f "$API_URL/health" || echo "Health check falló, pero continuamos"
+          
