@@ -120,15 +120,11 @@ class HealthResponse(BaseModel):
     model_info: Optional[dict] = None
     debug_info: Optional[dict] = None
 
-# Configurar root_path basado en el stage
-root_path = f"/{STAGE}" if STAGE and STAGE != "prod" else ""
-
-# Crear FastAPI app
+# Crear FastAPI app - Configuración simplificada
 app = FastAPI(
     title="DenseNet121 ONNX Inference API",
     description="API para inferencia con modelo DenseNet121 en AWS Lambda",
     version="1.0.0",
-    root_path=root_path,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json"
@@ -348,13 +344,5 @@ if model_loaded:
 else:
     logger.error("❌ Error cargando modelo al inicio")
 
-# Crear handler para Lambda con configuración específica
-lambda_handler = Mangum(
-    app, 
-    lifespan="off", 
-    api_gateway_base_path=f"/{STAGE}" if STAGE and STAGE != "prod" else None,
-    text_mime_types=[
-        "application/json",
-        "application/javascript", 
-        "application/xml",
-        "application/vnd.api+json",
+# Crear handler para Lambda - Configuración simplificada para HTTP API Gateway
+lambda_handler = Mangum(app, lifespan="off")
