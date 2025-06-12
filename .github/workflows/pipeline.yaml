@@ -238,9 +238,9 @@ jobs:
           echo "Construyendo imagen Docker..."
           docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
           
-          # Verificar que el modelo está en la imagen
+          # Verificar que el modelo está en la imagen (sin ejecutar el entrypoint)
           echo "Verificando que el modelo está en la imagen..."
-          docker run --rm $ECR_REPOSITORY:$IMAGE_TAG ls -la /var/task/model/
+          docker run --rm --entrypoint /bin/sh $ECR_REPOSITORY:$IMAGE_TAG -c "ls -la /var/task/model/ && echo 'Modelo encontrado:' && du -h /var/task/model/densenet121_Opset17.onnx"
           
           echo "Subiendo imagen a ECR..."
           docker push $ECR_REPOSITORY:$IMAGE_TAG
@@ -380,9 +380,9 @@ jobs:
           echo "Construyendo imagen Docker para producción..."
           docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
           
-          # Verificar que el modelo está en la imagen
+          # Verificar que el modelo está en la imagen (sin ejecutar el entrypoint)
           echo "Verificando que el modelo está en la imagen..."
-          docker run --rm $ECR_REPOSITORY:$IMAGE_TAG ls -la /var/task/model/
+          docker run --rm --entrypoint /bin/sh $ECR_REPOSITORY:$IMAGE_TAG -c "ls -la /var/task/model/ && echo 'Modelo encontrado:' && du -h /var/task/model/densenet121_Opset17.onnx"
           
           echo "Subiendo imagen a ECR..."
           docker push $ECR_REPOSITORY:$IMAGE_TAG
