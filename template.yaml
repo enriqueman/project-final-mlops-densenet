@@ -83,6 +83,25 @@ Resources:
             ApiId: !Ref DenseNetApi
             Path: /
             Method: ANY
+        DocsEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DenseNetApi
+            Path: /docs
+            Method: GET
+        OpenAPIEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DenseNetApi
+            Path: /openapi.json
+            Method: GET
+        RedocEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DenseNetApi
+            Path: /redoc
+            Method: GET
+        
       # Políticas IAM
       Policies:
         - CloudWatchLogsFullAccess

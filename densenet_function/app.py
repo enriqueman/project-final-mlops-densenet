@@ -247,42 +247,51 @@ async def predict_image(request: ImageRequest):
         logger.error(f"Error en predicción: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
-@app.post("/predict-file")
-async def predict_from_file(
-    file: UploadFile = File(..., description="Imagen a procesar"),
-    top_k: int = Query(default=5, description="Número de predicciones top a retornar")
-):
-    """Endpoint para subir archivo directamente"""
+# Verificar que python-multipart está disponible antes de crear el endpoint
+try:
+    import multipart
     
-    if not file.content_type or not file.content_type.startswith('image/'):
-        raise HTTPException(
-            status_code=400,
-            detail="El archivo debe ser una imagen (JPEG, PNG, etc.)"
-        )
-    
-    try:
-        # Leer archivo y convertir a base64
-        image_bytes = await file.read()
-        if not image_bytes:
+    @app.post("/predict-file")
+    async def predict_from_file(
+        file: UploadFile = File(..., description="Imagen a procesar"),
+        top_k: int = Query(default=5, description="Número de predicciones top a retornar")
+    ):
+        """Endpoint para subir archivo directamente"""
+        
+        if not file.content_type or not file.content_type.startswith('image/'):
             raise HTTPException(
                 status_code=400,
-                detail="El archivo está vacío"
+                detail="El archivo debe ser una imagen (JPEG, PNG, etc.)"
             )
+        
+        try:
+            # Leer archivo y convertir a base64
+            image_bytes = await file.read()
+            if not image_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El archivo está vacío"
+                )
+                
+            image_b64 = base64.b64encode(image_bytes).decode('utf-8')
             
-        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-        
-        # Usar el endpoint principal
-        request = ImageRequest(image=image_b64, top_k=top_k)
-        return await predict_image(request)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error procesando archivo: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error procesando archivo: {str(e)}"
-        )
+            # Usar el endpoint principal
+            request = ImageRequest(image=image_b64, top_k=top_k)
+            return await predict_image(request)
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error procesando archivo: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error procesando archivo: {str(e)}"
+            )
+    
+    logger.info("Endpoint predict-file habilitado")
+    
+except ImportError:
+    logger.warning("python-multipart no está disponible, endpoint predict-file deshabilitado")
 
 @app.get("/model-info")
 async def get_model_info():
@@ -303,4 +312,4 @@ async def get_model_info():
     }
 
 # Crear handler para Lambda
-lambda_handler = Mangum(app, lifespan="off")
+lambda_handler = Mangum(app, lifespan="off", api_gateway_base_path=None)
