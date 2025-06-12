@@ -1,4 +1,4 @@
-#densenet_function\app.py
+'''#densenet_function\app.py
 import base64
 import io
 import time
@@ -345,4 +345,119 @@ else:
     logger.error("❌ Error cargando modelo al inicio")
 
 # Crear handler para Lambda - Configuración simplificada para HTTP API Gateway
-lambda_handler = Mangum(app, lifespan="off")
+lambda_handler = Mangum(app, lifespan="off")'''
+
+# densenet_function/app.py - VERSION ULTRA SIMPLE PARA TEST
+import json
+import os
+import time
+import logging
+import traceback
+from fastapi import FastAPI
+from mangum import Mangum
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Variables de entorno básicas
+STAGE = os.environ.get('APP_STAGE', 'dev')
+
+# Crear FastAPI app ultra simple
+app = FastAPI(
+    title="DenseNet Test API",
+    description="API de test simplificada",
+    version="1.0.0"
+)
+
+@app.get("/")
+async def root():
+    """Endpoint raíz"""
+    return {"message": "API is working", "status": "healthy"}
+
+@app.get("/hello")
+async def hello():
+    """Hello World endpoint"""
+    return {"message": "Hello World"}
+
+@app.get("/test")
+async def test():
+    """Test endpoint"""
+    return {
+        "message": "Test successful",
+        "stage": STAGE,
+        "timestamp": time.time(),
+        "status": "OK"
+    }
+
+@app.get("/ping")
+async def ping():
+    """Ping endpoint"""
+    return "pong"
+
+@app.get("/info")
+async def info():
+    """System info"""
+    return {
+        "app": "DenseNet Test",
+        "stage": STAGE,
+        "working_dir": os.getcwd(),
+        "lambda_task_root": os.environ.get('LAMBDA_TASK_ROOT', 'Not set'),
+        "python_version": "3.9"
+    }
+
+# Handler con debugging extenso
+def lambda_handler(event, context):
+    """Lambda handler con debugging"""
+    logger.info("=== LAMBDA HANDLER START ===")
+    logger.info(f"Event: {json.dumps(event, indent=2)}")
+    logger.info(f"Context: {context}")
+    
+    # Información del evento
+    if isinstance(event, dict):
+        logger.info(f"Event keys: {list(event.keys())}")
+        
+        # HTTP API Gateway v2.0
+        if 'version' in event and event['version'] == '2.0':
+            logger.info("HTTP API Gateway v2.0 detected")
+            logger.info(f"HTTP Method: {event.get('requestContext', {}).get('http', {}).get('method')}")
+            logger.info(f"Path: {event.get('rawPath')}")
+            
+        # HTTP API Gateway v1.0 o REST API
+        elif 'httpMethod' in event:
+            logger.info("REST API Gateway or HTTP API v1.0 detected")
+            logger.info(f"HTTP Method: {event.get('httpMethod')}")
+            logger.info(f"Path: {event.get('path')}")
+        
+        # Otros tipos de evento
+        else:
+            logger.info("Unknown event type")
+    
+    try:
+        # Crear handler Mangum
+        mangum_handler = Mangum(app, lifespan="off")
+        result = mangum_handler(event, context)
+        
+        logger.info("=== LAMBDA HANDLER SUCCESS ===")
+        logger.info(f"Result: {result}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"=== LAMBDA HANDLER ERROR ===")
+        logger.error(f"Error: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Respuesta manual en caso de error
+        return {
+            "statusCode": 500,
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*"
+            },
+            "body": json.dumps({
+                "error": str(e),
+                "type": "Lambda Handler Error",
+                "stage": STAGE
+            })
+        }
