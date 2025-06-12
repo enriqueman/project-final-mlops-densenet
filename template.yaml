@@ -4,6 +4,7 @@ Description: 'DenseNet121 ONNX Inference API with FastAPI on EC2'
 
 Conditions:
   IsProd: !Equals [!Ref Stage, 'prod']
+  HasMultipleAZs: !Not [!Equals [!Select [1, !GetAZs ''], !Select [0, !GetAZs '']]]
 
 Parameters:
   Stage:
@@ -62,13 +63,16 @@ Resources:
         - Key: Name
           Value: !Sub 'densenet-public-subnet-1-${Stage}'
 
-  # Public Subnet 2
+  # Public Subnet 2 - Usando la misma AZ si solo hay una disponible
   DenseNetPublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref DenseNetVPC
       CidrBlock: 10.0.2.0/24
-      AvailabilityZone: !Select [1, !GetAZs '']
+      AvailabilityZone: !If 
+        - HasMultipleAZs
+        - !Select [1, !GetAZs '']
+        - !Select [0, !GetAZs '']  # Usar la misma AZ si solo hay una
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
@@ -377,6 +381,9 @@ Resources:
   # Auto Scaling Group
   DenseNetAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - DenseNetApplicationLoadBalancer
+      - DenseNetTargetGroup
     Properties:
       AutoScalingGroupName: !Sub 'densenet-asg-${Stage}'
       VPCZoneIdentifier:
@@ -388,7 +395,7 @@ Resources:
       MinSize: 1
       MaxSize: !If [IsProd, 3, 1]
       DesiredCapacity: 1
-      HealthCheckType: EC2
+      HealthCheckType: ELB
       HealthCheckGracePeriod: 300
       TargetGroupARNs:
         - !Ref DenseNetTargetGroup
@@ -403,6 +410,11 @@ Resources:
   # Application Load Balancer
   DenseNetApplicationLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: 
+      - DenseNetIGWAttachment
+      - DenseNetPublicRoute
+      - DenseNetSubnet1RouteTableAssociation
+      - DenseNetSubnet2RouteTableAssociation
     Properties:
       Name: !Sub 'densenet-alb-${Stage}'
       Scheme: internet-facing
@@ -449,10 +461,12 @@ Resources:
       HealthCheckPath: /health
       HealthCheckProtocol: HTTP
       HealthCheckIntervalSeconds: 30
-      HealthCheckTimeoutSeconds: 5
+      HealthCheckTimeoutSeconds: 10
       HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 3
+      UnhealthyThresholdCount: 5
       TargetType: instance
+      Matcher:
+        HttpCode: '200'
       Tags:
         - Key: Name
           Value: !Sub 'densenet-tg-${Stage}'
