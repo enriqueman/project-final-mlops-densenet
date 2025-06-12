@@ -173,11 +173,14 @@ jobs:
           aws ecr describe-repositories --repository-names app-${{ env.STAGE }} || \
           aws ecr create-repository --repository-name app-${{ env.STAGE }}
           
-          # Build Docker image with build args
+          # Build Docker image with build args including AWS credentials
           docker build -t app:latest \
             --build-arg AWS_REGION=$AWS_REGION \
             --build-arg STAGE=$STAGE \
             --build-arg MODEL_REPOSITORY=$MODEL_REPOSITORY \
+            --build-arg AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            --build-arg AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            --build-arg AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
             .
           
           # Tag and push to ECR
