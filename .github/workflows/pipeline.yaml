@@ -251,24 +251,19 @@ jobs:
         with:
           use-installer: true
 
-      - name: Build SAM application
-        run: |
-          echo "Construyendo aplicación SAM..."
-          sam build --debug
-          
-          # Verificar que el modelo está incluido en el build
-          echo "Verificando modelo en el build..."
-          if [ -f ".aws-sam/build/DenseNetInferenceFunction/model/densenet121_Opset17.onnx" ]; then
-            echo "✅ Modelo encontrado en el build SAM"
-            ls -l .aws-sam/build/DenseNetInferenceFunction/model/
-          else
-            echo "❌ Modelo NO encontrado en el build SAM"
-            echo "Contenido del directorio build:"
-            find .aws-sam/build/DenseNetInferenceFunction/ -type f -name "*.onnx" || echo "No se encontraron archivos .onnx"
-            exit 1
-          fi
-
       - name: Deploy to dev
+        run: |
+          echo "Desplegando a entorno dev..."
+          sam deploy \
+            --stack-name ${TESTING_STACK_NAME} \
+            --template-file ${SAM_TEMPLATE} \
+            --capabilities CAPABILITY_IAM \
+            --region ${TESTING_REGION} \
+            --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
+            --no-fail-on-empty-changeset \
+            --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE} \
+            --parameter-overrides Stage=dev \
+            --debug
         run: |
           echo "Desplegando a entorno dev..."
           sam deploy \
@@ -393,24 +388,19 @@ jobs:
         with:
           use-installer: true
 
-      - name: Build SAM application
-        run: |
-          echo "Construyendo aplicación SAM para producción..."
-          sam build --debug
-          
-          # Verificar que el modelo está incluido en el build
-          echo "Verificando modelo en el build..."
-          if [ -f ".aws-sam/build/DenseNetInferenceFunction/model/densenet121_Opset17.onnx" ]; then
-            echo "✅ Modelo encontrado en el build SAM"
-            ls -l .aws-sam/build/DenseNetInferenceFunction/model/
-          else
-            echo "❌ Modelo NO encontrado en el build SAM"
-            echo "Contenido del directorio build:"
-            find .aws-sam/build/DenseNetInferenceFunction/ -type f -name "*.onnx" || echo "No se encontraron archivos .onnx"
-            exit 1
-          fi
-
       - name: Deploy to production
+        run: |
+          echo "Desplegando a entorno prod..."
+          sam deploy \
+            --stack-name ${PROD_STACK_NAME} \
+            --template-file ${SAM_TEMPLATE} \
+            --capabilities CAPABILITY_IAM \
+            --region ${PROD_REGION} \
+            --s3-bucket ${PROD_ARTIFACTS_BUCKET} \
+            --no-fail-on-empty-changeset \
+            --role-arn ${PROD_CLOUDFORMATION_EXECUTION_ROLE} \
+            --parameter-overrides Stage=prod \
+            --debug
         run: |
           echo "Desplegando a entorno prod..."
           sam deploy \
