@@ -1,9 +1,7 @@
-# More information about the configuration file can be found here:
-# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-config.html
 version = 0.1
 
 [default.global.parameters]
-stack_name = "densenet-lambda"
+stack_name = "densenet-ec2"
 
 [default.build.parameters]
 parallel = true
@@ -12,11 +10,9 @@ parallel = true
 lint = true
 
 [default.deploy.parameters]
-capabilities = "CAPABILITY_IAM"
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
 confirm_changeset = false
-resolve_image_repos = true
-
-
+resolve_image_repos = false
 
 [default.sync.parameters]
 watch = true

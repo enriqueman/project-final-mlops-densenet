@@ -1,4 +1,4 @@
-name: Pipeline
+name: Pipeline EC2
 
 on:
   push:
@@ -13,17 +13,17 @@ env:
   PIPELINE_USER_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   PIPELINE_USER_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   SAM_TEMPLATE: template.yaml
-  TESTING_STACK_NAME: densenet-lambda-dev
+  TESTING_STACK_NAME: densenet-ec2-dev
   TESTING_PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie
   TESTING_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-perso-CloudFormationExecutionRo-LVTGVTJzrPve
   TESTING_ARTIFACTS_BUCKET: aws-sam-cli-managed-personal-accou-artifactsbucket-7twnozkcwdt3
-  TESTING_IMAGE_REPOSITORY: 471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-dev-pipeline-resources-imagerepository-kzgat478cs9h
+  TESTING_APP_REPOSITORY: densenet121-app-dev
   TESTING_REGION: us-east-1
-  PROD_STACK_NAME: densenet-lambda-prod
+  PROD_STACK_NAME: densenet-ec2-prod
   PROD_PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:user/aws-sam-cli-managed-personal-account-d-PipelineUser-0c4EBLF4Lx9H
   PROD_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie
   PROD_ARTIFACTS_BUCKET: aws-sam-cli-managed-personal-accou-artifactsbucket-lvukcyulkbfh
-  PROD_IMAGE_REPOSITORY: 471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-prod-pipeline-resources-imagerepository-jxjisqblyq2w
+  PROD_APP_REPOSITORY: densenet121-app-prod
   PROD_REGION: us-east-1
   TEST_DATA_BUCKET: densenet-test-data-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
   STAGE: ${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
@@ -60,14 +60,12 @@ jobs:
 
       - name: Setup test data bucket
         run: |
-          # Ejecutar script de configuración del bucket
           python -c "
           import boto3
           import time
           s3 = boto3.client('s3')
           bucket_name = '${{ env.TEST_DATA_BUCKET }}'
           
-          # Verificar si el bucket existe
           try:
               s3.head_bucket(Bucket=bucket_name)
               print(f'Bucket {bucket_name} ya existe')
@@ -80,7 +78,6 @@ jobs:
                       CreateBucketConfiguration={'LocationConstraint': '${{ env.TESTING_REGION }}'}
                   )
               print(f'Bucket {bucket_name} creado')
-              # Esperar a que el bucket esté disponible
               time.sleep(5)
           "
 
@@ -94,31 +91,20 @@ jobs:
           
       - name: Install Docker
         run: |
-          # Add Docker's official GPG key:
           sudo apt-get update
           sudo apt-get install -y ca-certificates curl gnupg
           sudo install -m 0755 -d /etc/apt/keyrings
           curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
           sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-          # Add the repository to Apt sources:
           echo \
             "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
             $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
             sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
           sudo apt-get update
-
-          # Install Docker packages
           sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-          # Start Docker service
           sudo systemctl start docker || true
           sudo systemctl status docker
-
-          # Add user to docker group
           sudo usermod -aG docker $USER
-          
-          # Verify Docker installation
           docker --version
 
       - name: Download model from ECR for tests
@@ -128,20 +114,14 @@ jobs:
           AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
           MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
         run: |
-          # Asegurarse que el directorio /tmp existe y tenemos permisos
           sudo mkdir -p /tmp
           sudo chmod 777 /tmp
-          
-          # Ejecutar script de descarga del modelo
           echo "Descargando modelo desde ECR para tests..."
           python scripts/download_model.py
-          
-          # Verificar que el modelo se descargó correctamente
           if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
             echo "Error: El modelo no se descargó correctamente"
             exit 1
           fi
-          
           echo "Modelo descargado exitosamente para tests"
           ls -l /tmp/densenet121_Opset17.onnx
 
@@ -151,13 +131,11 @@ jobs:
           STAGE: ${{ env.STAGE }}
           TEST_DATA_BUCKET: ${{ env.TEST_DATA_BUCKET }}
         run: |
-          # Verificar que el modelo existe antes de las pruebas
           if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
             echo "Error: El modelo no existe en /tmp"
             ls -la /tmp
             exit 1
           fi
-          
           pytest tests/test_model.py -v
 
   build-and-deploy-dev:
@@ -188,101 +166,153 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Download model from ECR for build
+      - name: Create application ECR repository if needed
         env:
           AWS_REGION: ${{ env.TESTING_REGION }}
-          STAGE: ${{ env.STAGE }}
-          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
-          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
+          REPOSITORY_NAME: ${{ env.TESTING_APP_REPOSITORY }}
         run: |
-          # Asegurarse que el directorio existe
-          sudo mkdir -p /tmp
-          sudo chmod 777 /tmp
-          
-          # Ejecutar script de descarga del modelo
-          echo "Descargando modelo desde ECR para build..."
-          python scripts/download_model.py
-          
-          # Verificar que el modelo se descargó correctamente
-          if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
-            echo "Error: El modelo no se descargó correctamente"
-            exit 1
-          fi
-          
-          echo "Modelo descargado exitosamente"
-          ls -l /tmp/densenet121_Opset17.onnx
-          
-          # Copiar el modelo a la carpeta de la función para el build
-          cp /tmp/densenet121_Opset17.onnx densenet_function/densenet121_Opset17.onnx
-          
-          # Verificar que se copió correctamente
-          if [ ! -f "densenet_function/densenet121_Opset17.onnx" ]; then
-            echo "Error: El modelo no se copió a la carpeta de la función"
-            exit 1
-          fi
-          
-          echo "Modelo copiado a la carpeta de la función exitosamente"
-          ls -l densenet_function/densenet121_Opset17.onnx
+          aws ecr describe-repositories --repository-names $REPOSITORY_NAME --region $AWS_REGION 2>/dev/null || {
+            echo "Creando repositorio ECR para la aplicación..."
+            aws ecr create-repository \
+              --repository-name $REPOSITORY_NAME \
+              --region $AWS_REGION \
+              --image-scanning-configuration scanOnPush=true \
+              --image-tag-mutability MUTABLE
+            echo "Repositorio ECR creado: $REPOSITORY_NAME"
+          }
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Lambda image
+      - name: Build and push application image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.TESTING_IMAGE_REPOSITORY }}
+          ECR_REPOSITORY: ${{ env.TESTING_APP_REPOSITORY }}
           IMAGE_TAG: latest
+          ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ env.TESTING_REGION }}
         run: |
-          cd densenet_function
-          echo "Construyendo imagen Docker..."
-          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+          cd ec2_app
           
-          # Verificar que el modelo está en la imagen (sin ejecutar el entrypoint)
-          echo "Verificando que el modelo está en la imagen..."
-          docker run --rm --entrypoint /bin/sh $ECR_REPOSITORY:$IMAGE_TAG -c "ls -la /var/task/model/ && echo 'Modelo encontrado:' && du -h /var/task/model/densenet121_Opset17.onnx"
+          # Verificar que tenemos los archivos necesarios
+          if [ ! -f "Dockerfile" ]; then
+            echo "Error: Dockerfile no encontrado en ec2_app/"
+            exit 1
+          fi
+          
+          echo "Construyendo imagen Docker para EC2..."
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           
           echo "Subiendo imagen a ECR..."
-          docker push $ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           
-          echo "✅ Imagen construida y subida exitosamente"
+          echo "✅ Imagen de aplicación construida y subida exitosamente"
+          echo "Imagen: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
       - uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
 
       - name: Deploy to dev
+        env:
+          INSTANCE_TYPE: t3.medium
         run: |
-          echo "Desplegando a entorno dev..."
+          echo "Desplegando infraestructura EC2 a entorno dev..."
           sam deploy \
             --stack-name ${TESTING_STACK_NAME} \
             --template-file ${SAM_TEMPLATE} \
-            --capabilities CAPABILITY_IAM \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --region ${TESTING_REGION} \
             --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
             --no-fail-on-empty-changeset \
             --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE} \
-            --parameter-overrides Stage=dev \
+            --parameter-overrides \
+              Stage=dev \
+              InstanceType=${INSTANCE_TYPE} \
             --debug
 
-      - name: Verify deployment
+      - name: Wait for deployment and verify
+        env:
+          STACK_NAME: ${{ env.TESTING_STACK_NAME }}
+          AWS_REGION: ${{ env.TESTING_REGION }}
         run: |
-          echo "Verificando deployment..."
-          # Obtener la URL de la API
+          echo "Esperando a que el deployment complete..."
+          aws cloudformation wait stack-update-complete \
+            --stack-name ${STACK_NAME} \
+            --region ${AWS_REGION} || \
+          aws cloudformation wait stack-create-complete \
+            --stack-name ${STACK_NAME} \
+            --region ${AWS_REGION}
+          
+          echo "Obteniendo URL de la aplicación..."
           API_URL=$(aws cloudformation describe-stacks \
-            --stack-name ${TESTING_STACK_NAME} \
-            --region ${TESTING_REGION} \
+            --stack-name ${STACK_NAME} \
+            --region ${AWS_REGION} \
             --query 'Stacks[0].Outputs[?OutputKey==`DenseNetApiUrl`].OutputValue' \
             --output text)
           
           echo "API URL: $API_URL"
           
-          # Esperar un momento para que la función esté lista
-          sleep 30
+          # Esperar a que la aplicación esté lista
+          echo "Esperando a que la aplicación esté disponible..."
+          for i in {1..20}; do
+            if curl -f -m 10 "$API_URL/health" 2>/dev/null; then
+              echo "✅ Aplicación respondiendo correctamente"
+              break
+            fi
+            echo "Esperando... intento $i/20"
+            sleep 30
+          done
           
-          # Probar el health endpoint
-          echo "Probando health endpoint..."
-          curl -f "$API_URL/health" || echo "Health check falló, pero continuamos"
+          # Verificar endpoint de documentación
+          echo "Verificando endpoint de documentación..."
+          curl -f -m 10 "$API_URL/docs" || echo "⚠️ Docs endpoint no responde, pero la aplicación está funcionando"
+
+      - name: Trigger application restart on instances
+        env:
+          STACK_NAME: ${{ env.TESTING_STACK_NAME }}
+          AWS_REGION: ${{ env.TESTING_REGION }}
+        run: |
+          echo "Reiniciando aplicación en instancias EC2..."
+          
+          # Obtener el nombre del Auto Scaling Group
+          ASG_NAME=$(aws cloudformation describe-stacks \
+            --stack-name ${STACK_NAME} \
+            --region ${AWS_REGION} \
+            --query 'Stacks[0].Outputs[?OutputKey==`AutoScalingGroupName`].OutputValue' \
+            --output text)
+          
+          if [ ! -z "$ASG_NAME" ]; then
+            echo "Auto Scaling Group: $ASG_NAME"
+            
+            # Obtener instancias del ASG
+            INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+              --auto-scaling-group-names $ASG_NAME \
+              --region ${AWS_REGION} \
+              --query 'AutoScalingGroups[0].Instances[?LifecycleState==`InService`].InstanceId' \
+              --output text)
+            
+            if [ ! -z "$INSTANCE_IDS" ]; then
+              echo "Instancias encontradas: $INSTANCE_IDS"
+              
+              # Ejecutar comando de reinicio en cada instancia
+              for INSTANCE_ID in $INSTANCE_IDS; do
+                echo "Reiniciando aplicación en instancia: $INSTANCE_ID"
+                aws ssm send-command \
+                  --region ${AWS_REGION} \
+                  --document-name "AWS-RunShellScript" \
+                  --targets "Key=instanceids,Values=$INSTANCE_ID" \
+                  --parameters 'commands=["sudo systemctl restart densenet-app", "sleep 30", "/home/ec2-user/health-check.sh"]' \
+                  --comment "Restart DenseNet application after deployment" \
+                  --timeout-seconds 300 || echo "⚠️ No se pudo enviar comando SSM a $INSTANCE_ID"
+              done
+            else
+              echo "No se encontraron instancias en servicio"
+            fi
+          else
+            echo "No se pudo obtener el nombre del Auto Scaling Group"
+          fi
 
   build-and-deploy-prod:
     if: github.ref == 'refs/heads/prod'
@@ -313,98 +343,88 @@ jobs:
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Download model from ECR for build
+      - name: Create application ECR repository if needed
         env:
           AWS_REGION: ${{ env.PROD_REGION }}
-          STAGE: ${{ env.STAGE }}
-          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
-          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
+          REPOSITORY_NAME: ${{ env.PROD_APP_REPOSITORY }}
         run: |
-          # Asegurarse que el directorio existe
-          sudo mkdir -p /tmp
-          sudo chmod 777 /tmp
-          
-          # Ejecutar script de descarga del modelo
-          echo "Descargando modelo desde ECR para build..."
-          python scripts/download_model.py
-          
-          # Verificar que el modelo se descargó correctamente
-          if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
-            echo "Error: El modelo no se descargó correctamente"
-            exit 1
-          fi
-          
-          echo "Modelo descargado exitosamente"
-          ls -l /tmp/densenet121_Opset17.onnx
-          
-          # Copiar el modelo a la carpeta de la función para el build
-          cp /tmp/densenet121_Opset17.onnx densenet_function/densenet121_Opset17.onnx
-          
-          # Verificar que se copió correctamente
-          if [ ! -f "densenet_function/densenet121_Opset17.onnx" ]; then
-            echo "Error: El modelo no se copió a la carpeta de la función"
-            exit 1
-          fi
-          
-          echo "Modelo copiado a la carpeta de la función exitosamente"
-          ls -l densenet_function/densenet121_Opset17.onnx
+          aws ecr describe-repositories --repository-names $REPOSITORY_NAME --region $AWS_REGION 2>/dev/null || {
+            echo "Creando repositorio ECR para la aplicación..."
+            aws ecr create-repository \
+              --repository-name $REPOSITORY_NAME \
+              --region $AWS_REGION \
+              --image-scanning-configuration scanOnPush=true \
+              --image-tag-mutability MUTABLE
+            echo "Repositorio ECR creado: $REPOSITORY_NAME"
+          }
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Lambda image
+      - name: Build and push application image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.PROD_IMAGE_REPOSITORY }}
+          ECR_REPOSITORY: ${{ env.PROD_APP_REPOSITORY }}
           IMAGE_TAG: latest
         run: |
-          cd densenet_function
+          cd ec2_app
           echo "Construyendo imagen Docker para producción..."
-          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
-          
-          # Verificar que el modelo está en la imagen (sin ejecutar el entrypoint)
-          echo "Verificando que el modelo está en la imagen..."
-          docker run --rm --entrypoint /bin/sh $ECR_REPOSITORY:$IMAGE_TAG -c "ls -la /var/task/model/ && echo 'Modelo encontrado:' && du -h /var/task/model/densenet121_Opset17.onnx"
-          
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           echo "Subiendo imagen a ECR..."
-          docker push $ECR_REPOSITORY:$IMAGE_TAG
-          
-          echo "✅ Imagen construida y subida exitosamente"
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "✅ Imagen de aplicación construida y subida exitosamente"
 
       - uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
 
       - name: Deploy to production
+        env:
+          INSTANCE_TYPE: t3.large
         run: |
-          echo "Desplegando a entorno prod..."
+          echo "Desplegando infraestructura EC2 a entorno prod..."
           sam deploy \
             --stack-name ${PROD_STACK_NAME} \
             --template-file ${SAM_TEMPLATE} \
-            --capabilities CAPABILITY_IAM \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --region ${PROD_REGION} \
             --s3-bucket ${PROD_ARTIFACTS_BUCKET} \
             --no-fail-on-empty-changeset \
             --role-arn ${PROD_CLOUDFORMATION_EXECUTION_ROLE} \
-            --parameter-overrides Stage=prod \
+            --parameter-overrides \
+              Stage=prod \
+              InstanceType=${INSTANCE_TYPE} \
             --debug
 
       - name: Verify production deployment
+        env:
+          STACK_NAME: ${{ env.PROD_STACK_NAME }}
+          AWS_REGION: ${{ env.PROD_REGION }}
         run: |
           echo "Verificando deployment en producción..."
-          # Obtener la URL de la API
+          aws cloudformation wait stack-update-complete \
+            --stack-name ${STACK_NAME} \
+            --region ${AWS_REGION} || \
+          aws cloudformation wait stack-create-complete \
+            --stack-name ${STACK_NAME} \
+            --region ${AWS_REGION}
+          
           API_URL=$(aws cloudformation describe-stacks \
-            --stack-name ${PROD_STACK_NAME} \
-            --region ${PROD_REGION} \
+            --stack-name ${STACK_NAME} \
+            --region ${AWS_REGION} \
             --query 'Stacks[0].Outputs[?OutputKey==`DenseNetApiUrl`].OutputValue' \
             --output text)
           
           echo "Production API URL: $API_URL"
           
-          # Esperar un momento para que la función esté lista
-          sleep 30
-          
-          # Probar el health endpoint
-          echo "Probando health endpoint en producción..."
-          curl -f "$API_URL/health" || echo "Health check falló, pero continuamos"
+          # Esperar y verificar que la aplicación esté funcionando
+          echo "Verificando que la aplicación esté funcionando..."
+          for i in {1..20}; do
+            if curl -f -m 10 "$API_URL/health" 2>/dev/null; then
+              echo "✅ Aplicación en producción respondiendo correctamente"
+              break
+            fi
+            echo "Esperando... intento $i/20"
+            sleep 30
+          done

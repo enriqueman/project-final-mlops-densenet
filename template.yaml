@@ -1,18 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'DenseNet121 ONNX Inference API with FastAPI'
+Description: 'DenseNet121 ONNX Inference API with FastAPI on EC2'
 
 Conditions:
   IsProd: !Equals [!Ref Stage, 'prod']
-
-Globals:
-  Function:
-    Timeout: 30
-    MemorySize: 3008
-    Environment:
-      Variables:
-        OMP_NUM_THREADS: 1
-        ONNX_DISABLE_OPTIMIZATION: 0
 
 Parameters:
   Stage:
@@ -20,13 +11,175 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
     Description: Environment stage
+  
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.small, t3.medium, t3.large, t3.xlarge]
+    Description: EC2 instance type
+  
+  KeyPairName:
+    Type: String
+    Default: ""
+    Description: EC2 Key Pair for SSH access (optional)
 
 Resources:
-  # ECR Repository para la aplicación Lambda
+  # VPC para la aplicación
+  DenseNetVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-vpc-${Stage}'
+
+  # Internet Gateway
+  DenseNetInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-igw-${Stage}'
+
+  # Attach Internet Gateway to VPC
+  DenseNetIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref DenseNetVPC
+      InternetGatewayId: !Ref DenseNetInternetGateway
+
+  # Public Subnet
+  DenseNetPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref DenseNetVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-public-subnet-${Stage}'
+
+  # Route Table
+  DenseNetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DenseNetVPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-rt-${Stage}'
+
+  # Public Route
+  DenseNetPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: DenseNetIGWAttachment
+    Properties:
+      RouteTableId: !Ref DenseNetRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref DenseNetInternetGateway
+
+  # Associate Route Table with Subnet
+  DenseNetSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DenseNetPublicSubnet
+      RouteTableId: !Ref DenseNetRouteTable
+
+  # Security Group para la instancia EC2
+  DenseNetSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for DenseNet inference EC2 instance
+      VpcId: !Ref DenseNetVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP access
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+          Description: FastAPI application
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-sg-${Stage}'
+
+  # IAM Role para la instancia EC2
+  DenseNetEC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'DenseNetEC2Role-${Stage}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: ECRAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                Resource: '*'
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}'
+                  - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}/*'
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: '*'
+
+  # Instance Profile
+  DenseNetInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref DenseNetEC2Role
+
+  # ECR Repository para la aplicación
   DenseNetECRRepository:
     Type: AWS::ECR::Repository
     Properties:
-      RepositoryName: !Sub 'densenet121-lambda-${Stage}'
+      RepositoryName: !Sub 'densenet121-app-${Stage}'
       ImageTagMutability: MUTABLE
       ImageScanningConfiguration:
         ScanOnPush: true
@@ -49,180 +202,326 @@ Resources:
             ]
           }
 
-  # Lambda Function con IMAGE
-  DenseNetInferenceFunction:
-    Type: AWS::Serverless::Function
+  # Launch Template para EC2
+  DenseNetLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
     Properties:
-      FunctionName: !Sub 'densenet121-inference-${Stage}'
-      PackageType: Image
-      ImageUri: !If 
-        - IsProd
-        - !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/aws-sam-cli-managed-prod-pipeline-resources-imagerepository-jxjisqblyq2w:latest'
-        - !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/aws-sam-cli-managed-dev-pipeline-resources-imagerepository-kzgat478cs9h:latest'
-      Architectures:
-        - x86_64
-      Timeout: 180
-      Environment:
-        Variables:
-          APP_STAGE: !Ref Stage
-          APP_LOG_LEVEL: INFO
-          APP_REGION: !Ref 'AWS::Region'
-          APP_ACCOUNT_ID: !Ref 'AWS::AccountId'
-          MODEL_ECR_REPOSITORY: !Sub 'densenet121-model-${Stage}'
-      Events:
-        # API Gateway simplificado
-        HttpApiEvent:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref DenseNetApi
-            Path: /{proxy+}
-            Method: ANY
-        HttpApiRootEvent:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref DenseNetApi
-            Path: /
-            Method: ANY
-        DocsEvent:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref DenseNetApi
-            Path: /docs
-            Method: GET
-        OpenAPIEvent:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref DenseNetApi
-            Path: /openapi.json
-            Method: GET
-        RedocEvent:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref DenseNetApi
-            Path: /redoc
-            Method: GET
-        
-      # Políticas IAM
-      Policies:
-        - CloudWatchLogsFullAccess
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                - logs:CreateLogGroup
-                - logs:CreateLogStream
-                - logs:PutLogEvents
-              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
-            - Effect: Allow
-              Action:
-                - ecr:GetAuthorizationToken
-                - ecr:BatchCheckLayerAvailability
-                - ecr:GetDownloadUrlForLayer
-                - ecr:BatchGetImage
-                - ecr:DescribeRepositories
-                - ecr:ListImages
-              Resource: '*'
-            - Effect: Allow
-              Action:
-                - sts:GetCallerIdentity
-              Resource: '*'
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                - s3:GetObject
-                - s3:ListBucket
-              Resource:
-                - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}'
-                - !Sub 'arn:aws:s3:::densenet-test-data-${Stage}/*'
+      LaunchTemplateName: !Sub 'densenet-lt-${Stage}'
+      LaunchTemplateData:
+        ImageId: ami-0c02fb55956c7d316  # Amazon Linux 2023
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt DenseNetInstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref DenseNetSecurityGroup
+        KeyName: !If [IsProd, !Ref KeyPairName, !Ref 'AWS::NoValue']
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y
+            yum install -y docker awscli
 
-  # HTTP API Gateway (más simple que REST API)
-  DenseNetApi:
-    Type: AWS::Serverless::HttpApi
+            # Instalar Docker Compose
+            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            chmod +x /usr/local/bin/docker-compose
+
+            # Iniciar Docker
+            systemctl start docker
+            systemctl enable docker
+            usermod -a -G docker ec2-user
+
+            # Instalar CloudWatch Agent
+            wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
+            rpm -U ./amazon-cloudwatch-agent.rpm
+
+            # Configurar variables de entorno
+            cat > /home/ec2-user/.env << EOF
+            AWS_DEFAULT_REGION=${AWS::Region}
+            AWS_REGION=${AWS::Region}
+            STAGE=${Stage}
+            MODEL_ECR_REPOSITORY=densenet121-model-${Stage}
+            APP_ECR_REPOSITORY=densenet121-app-${Stage}
+            ACCOUNT_ID=${AWS::AccountId}
+            S3_TEST_BUCKET=densenet-test-data-${Stage}
+            EOF
+
+            # Crear script de inicio
+            cat > /home/ec2-user/start-app.sh << 'EOF'
+            #!/bin/bash
+            source /home/ec2-user/.env
+
+            # Login a ECR
+            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+            # Detener contenedores existentes
+            docker stop densenet-app 2>/dev/null || true
+            docker rm densenet-app 2>/dev/null || true
+
+            # Descargar y ejecutar la aplicación
+            APP_IMAGE="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$APP_ECR_REPOSITORY:latest"
+            docker pull $APP_IMAGE
+
+            # Ejecutar el contenedor
+            docker run -d \
+              --name densenet-app \
+              --restart unless-stopped \
+              -p 80:8000 \
+              -p 8000:8000 \
+              -e AWS_DEFAULT_REGION=$AWS_REGION \
+              -e AWS_REGION=$AWS_REGION \
+              -e STAGE=$STAGE \
+              -e MODEL_ECR_REPOSITORY=$MODEL_ECR_REPOSITORY \
+              -e S3_TEST_BUCKET=$S3_TEST_BUCKET \
+              -v /var/log/densenet:/var/log/app \
+              $APP_IMAGE
+
+            # Configurar logs
+            mkdir -p /var/log/densenet
+            chmod 755 /var/log/densenet
+            EOF
+
+            chmod +x /home/ec2-user/start-app.sh
+            chown ec2-user:ec2-user /home/ec2-user/start-app.sh
+            chown ec2-user:ec2-user /home/ec2-user/.env
+
+            # Configurar CloudWatch Agent
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << EOF
+            {
+              "logs": {
+                "logs_collected": {
+                  "files": {
+                    "collect_list": [
+                      {
+                        "file_path": "/var/log/densenet/*.log",
+                        "log_group_name": "/aws/ec2/densenet-${Stage}",
+                        "log_stream_name": "{instance_id}/application"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            EOF
+
+            # Iniciar CloudWatch Agent
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+
+            # Configurar servicio systemd para la aplicación
+            cat > /etc/systemd/system/densenet-app.service << EOF
+            [Unit]
+            Description=DenseNet Application
+            After=docker.service
+            Requires=docker.service
+
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            User=ec2-user
+            WorkingDirectory=/home/ec2-user
+            ExecStart=/home/ec2-user/start-app.sh
+            ExecStop=/usr/bin/docker stop densenet-app
+            TimeoutStartSec=300
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            systemctl daemon-reload
+            systemctl enable densenet-app
+
+            # Crear script de health check
+            cat > /home/ec2-user/health-check.sh << 'EOF'
+            #!/bin/bash
+            for i in {1..30}; do
+              if curl -f http://localhost:8000/health; then
+                echo "Application is healthy"
+                exit 0
+              fi
+              echo "Waiting for application to start... ($i/30)"
+              sleep 10
+            done
+            echo "Application failed to start"
+            exit 1
+            EOF
+
+            chmod +x /home/ec2-user/health-check.sh
+            chown ec2-user:ec2-user /home/ec2-user/health-check.sh
+
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub 'densenet-instance-${Stage}'
+              - Key: Environment
+                Value: !Ref Stage
+
+  # Auto Scaling Group
+  DenseNetAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
-      StageName: !Ref Stage
-      CorsConfiguration:
-        AllowOrigins:
-          - "*"
-        AllowHeaders:
-          - "*"
-        AllowMethods:
-          - "*"
-        MaxAge: 600
+      AutoScalingGroupName: !Sub 'densenet-asg-${Stage}'
+      VPCZoneIdentifier:
+        - !Ref DenseNetPublicSubnet
+      LaunchTemplate:
+        LaunchTemplateId: !Ref DenseNetLaunchTemplate
+        Version: !GetAtt DenseNetLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: !If [IsProd, 3, 1]
+      DesiredCapacity: 1
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      TargetGroupARNs:
+        - !Ref DenseNetTargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-asg-${Stage}'
+          PropagateAtLaunch: false
+        - Key: Environment
+          Value: !Ref Stage
+          PropagateAtLaunch: true
+
+  # Application Load Balancer
+  DenseNetApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub 'densenet-alb-${Stage}'
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref DenseNetPublicSubnet
+      SecurityGroups:
+        - !Ref DenseNetALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-alb-${Stage}'
+
+  # Security Group para ALB
+  DenseNetALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for DenseNet ALB
+      VpcId: !Ref DenseNetVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP access
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS access
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-alb-sg-${Stage}'
+
+  # Target Group
+  DenseNetTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub 'densenet-tg-${Stage}'
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !Ref DenseNetVPC
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetType: instance
+      Tags:
+        - Key: Name
+          Value: !Sub 'densenet-tg-${Stage}'
+
+  # ALB Listener
+  DenseNetALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref DenseNetTargetGroup
+      LoadBalancerArn: !Ref DenseNetApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
 
   # CloudWatch Log Group
   DenseNetLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub '/aws/lambda/densenet121-inference-${Stage}'
+      LogGroupName: !Sub '/aws/ec2/densenet-${Stage}'
       RetentionInDays: 7
 
   # CloudWatch Alarms
-  DenseNetErrorAlarm:
+  DenseNetCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'densenet121-errors-${Stage}'
-      AlarmDescription: 'High error rate for DenseNet inference'
-      MetricName: Errors
-      Namespace: AWS/Lambda
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 5
-      ComparisonOperator: GreaterThanThreshold
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref DenseNetInferenceFunction
-
-  DenseNetLatencyAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'densenet121-latency-${Stage}'
-      AlarmDescription: 'High latency for DenseNet inference'
-      MetricName: Duration
-      Namespace: AWS/Lambda
+      AlarmName: !Sub 'densenet-cpu-${Stage}'
+      AlarmDescription: 'High CPU utilization for DenseNet EC2'
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
       Statistic: Average
       Period: 300
       EvaluationPeriods: 2
-      Threshold: 10000
+      Threshold: 80
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
-        - Name: FunctionName
-          Value: !Ref DenseNetInferenceFunction
+        - Name: AutoScalingGroupName
+          Value: !Ref DenseNetAutoScalingGroup
+
+  DenseNetUnhealthyHostsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'densenet-unhealthy-hosts-${Stage}'
+      AlarmDescription: 'Unhealthy hosts for DenseNet'
+      MetricName: UnHealthyHostCount
+      Namespace: AWS/ApplicationELB
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: TargetGroup
+          Value: !GetAtt DenseNetTargetGroup.TargetGroupFullName
+        - Name: LoadBalancer
+          Value: !GetAtt DenseNetApplicationLoadBalancer.LoadBalancerFullName
 
 Outputs:
   DenseNetApiUrl:
-    Description: 'API Gateway endpoint URL'
-    Value: !Sub 'https://${DenseNetApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+    Description: 'Application Load Balancer URL'
+    Value: !Sub 'http://${DenseNetApplicationLoadBalancer.DNSName}'
     Export:
       Name: !Sub '${AWS::StackName}-ApiUrl'
 
-  DenseNetFunctionName:
-    Description: 'Lambda Function Name'
-    Value: !Ref DenseNetInferenceFunction
-    Export:
-      Name: !Sub '${AWS::StackName}-FunctionName'
-
-  ECRRepositoryUri:
-    Description: 'ECR Repository URI for Lambda'
-    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${DenseNetECRRepository}'
-    Export:
-      Name: !Sub '${AWS::StackName}-ECRUri'
-
   HealthCheckUrl:
     Description: 'Health check endpoint'
-    Value: !Sub 'https://${DenseNetApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/health'
+    Value: !Sub 'http://${DenseNetApplicationLoadBalancer.DNSName}/health'
 
   SwaggerDocsUrl:
     Description: 'API Documentation (FastAPI Swagger)'
-    Value: !Sub 'https://${DenseNetApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/docs'
+    Value: !Sub 'http://${DenseNetApplicationLoadBalancer.DNSName}/docs'
 
   RedocDocsUrl:
     Description: 'API Documentation (ReDoc)'
-    Value: !Sub 'https://${DenseNetApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/redoc'
+    Value: !Sub 'http://${DenseNetApplicationLoadBalancer.DNSName}/redoc'
+
+  ECRRepositoryUri:
+    Description: 'ECR Repository URI for Application'
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${DenseNetECRRepository}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ECRUri'
 
   ModelECRRepositoryName:
     Description: 'Model ECR Repository Name (created manually)'
     Value: !Sub 'densenet121-model-${Stage}'
     Export:
       Name: !Sub '${AWS::StackName}-ModelECRRepoName'
+
+  AutoScalingGroupName:
+    Description: 'Auto Scaling Group Name'
+    Value: !Ref DenseNetAutoScalingGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ASGName'
