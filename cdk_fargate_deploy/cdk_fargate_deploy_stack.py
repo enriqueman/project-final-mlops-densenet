@@ -19,7 +19,7 @@ class CdkFargateDeployStack(Stack):
         
         # Get environment from context
         stage = self.node.try_get_context('stage') or 'dev'
-        region = self.node.try_get_context('region') or 'us-east-2'
+        region = self.node.try_get_context('region') or 'us-east-1'
         account_id = Stack.of(self).account
         
         # Create VPC

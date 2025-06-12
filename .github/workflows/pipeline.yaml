@@ -10,13 +10,13 @@ env:
   PIPELINE_USER_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   PIPELINE_USER_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:role/cdk-pipeline-deployment-role
-  TESTING_REGION: us-east-2
+  TESTING_REGION: us-east-1
   PROD_REGION: us-east-1
   TEST_DATA_BUCKET: densenet-test-data-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
   STAGE: ${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
   MODEL_REPOSITORY: densenet121-model-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
   STACK_NAME: densenet-fargate-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
-  AWS_REGION: ${{ github.ref == 'refs/heads/prod' && 'us-east-1' || 'us-east-2' }}
+  AWS_REGION: ${{ github.ref == 'refs/heads/prod' && 'us-east-1' || 'us-east-1' }}
 
 jobs:
   test:
