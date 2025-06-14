@@ -1,38 +1,29 @@
-name: Pipeline
+name: CdkPipeline
 
 on:
   push:
     branches:
-      - 'prod'
       - 'dev'
-  delete:
-    branches:
-      - 'feature**'
+      - 'prod'
 
 env:
   PIPELINE_USER_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   PIPELINE_USER_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  SAM_TEMPLATE: template.yaml
-  TESTING_STACK_NAME: densenet-lambda-dev
-  TESTING_PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie
-  TESTING_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-perso-CloudFormationExecutionRo-LVTGVTJzrPve
-  TESTING_ARTIFACTS_BUCKET: aws-sam-cli-managed-personal-accou-artifactsbucket-7twnozkcwdt3
-  TESTING_IMAGE_REPOSITORY: 471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-dev-pipeline-resources-imagerepository-kzgat478cs9h
+  PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:role/cdk-pipeline-deployment-role
   TESTING_REGION: us-east-1
-  PROD_STACK_NAME: densenet-lambda-prod
-  PROD_PIPELINE_EXECUTION_ROLE: arn:aws:iam::471112837636:user/aws-sam-cli-managed-personal-account-d-PipelineUser-0c4EBLF4Lx9H
-  PROD_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::471112837636:role/aws-sam-cli-managed-personal--PipelineExecutionRole-w1ceHg3Srqie
-  PROD_ARTIFACTS_BUCKET: aws-sam-cli-managed-personal-accou-artifactsbucket-lvukcyulkbfh
-  PROD_IMAGE_REPOSITORY: 471112837636.dkr.ecr.us-east-1.amazonaws.com/aws-sam-cli-managed-prod-pipeline-resources-imagerepository-jxjisqblyq2w
   PROD_REGION: us-east-1
-  TEST_DATA_BUCKET: densenet-test-data-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
-  STAGE: ${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
-  MODEL_REPOSITORY: densenet121-model-${{ github.ref == 'refs/heads/prod' && 'prod' || 'dev' }}
+  AWS_ACCOUNT_ID: 471112837636
 
 jobs:
-  test:
-    if: github.event_name == 'push'
+  # ========== DEV ENVIRONMENT ==========
+  test-dev:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
+    env:
+      STAGE: dev
+      TEST_DATA_BUCKET: densenet-test-data-dev
+      MODELS_BUCKET: densenet-models-dev
+      AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@v3
       
@@ -45,138 +36,86 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r tests/requirements-test.txt
-          pip install docker boto3 requests Pillow numpy onnxruntime
+          pip install boto3 requests Pillow numpy onnxruntime
           
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.TESTING_REGION }}
-          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: testing-session
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
+          role-session-name: testing-session-dev
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
       - name: Setup test data bucket
         run: |
-          # Ejecutar script de configuración del bucket
           python -c "
           import boto3
           import time
           s3 = boto3.client('s3')
           bucket_name = '${{ env.TEST_DATA_BUCKET }}'
           
-          # Verificar si el bucket existe
           try:
               s3.head_bucket(Bucket=bucket_name)
               print(f'Bucket {bucket_name} ya existe')
           except:
-              if '${{ env.TESTING_REGION }}' == 'us-east-1':
+              if '${{ env.AWS_REGION }}' == 'us-east-1':
                   s3.create_bucket(Bucket=bucket_name)
               else:
                   s3.create_bucket(
                       Bucket=bucket_name,
-                      CreateBucketConfiguration={'LocationConstraint': '${{ env.TESTING_REGION }}'}
+                      CreateBucketConfiguration={'LocationConstraint': '${{ env.AWS_REGION }}'}
                   )
               print(f'Bucket {bucket_name} creado')
-              # Esperar a que el bucket esté disponible
               time.sleep(5)
           "
 
+      - name: Verify models bucket exists
+        run: |
+          echo "Verificando que el bucket de modelos existe..."
+          aws s3 ls s3://${{ env.MODELS_BUCKET }}/models/ || {
+            echo "❌ Error: El bucket de modelos ${{ env.MODELS_BUCKET }} no existe o está vacío"
+            echo "Por favor, ejecuta el script setup-models-bucket.sh primero:"
+            echo "  ./setup-models-bucket.sh ${{ env.STAGE }} ${{ env.AWS_REGION }}"
+            exit 1
+          }
+          echo "✅ Bucket de modelos verificado"
+
       - name: Generate and upload test data
-        env:
-          AWS_REGION: ${{ env.TESTING_REGION }}
-          STAGE: ${{ env.STAGE }}
-          TEST_DATA_BUCKET: ${{ env.TEST_DATA_BUCKET }}
         run: |
           python scripts/generate_test_data.py
-          
-      - name: Install Docker
+
+      - name: Download model from S3 for tests
         run: |
-          # Add Docker's official GPG key:
-          sudo apt-get update
-          sudo apt-get install -y ca-certificates curl gnupg
-          sudo install -m 0755 -d /etc/apt/keyrings
-          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-          sudo chmod a+r /etc/apt/keyrings/docker.gpg
-
-          # Add the repository to Apt sources:
-          echo \
-            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-            $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-            sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-          sudo apt-get update
-
-          # Install Docker packages
-          sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-          # Start Docker service
-          sudo systemctl start docker || true
-          sudo systemctl status docker
-
-          # Add user to docker group
-          sudo usermod -aG docker $USER
-          
-          # Verify Docker installation
-          docker --version
-
-      - name: Inspect model image
-        env:
-          AWS_REGION: ${{ env.TESTING_REGION }}
-          STAGE: ${{ env.STAGE }}
-          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
-          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
-        run: |
-          echo "Inspeccionando imagen del modelo..."
-          python scripts/inspect_model_image.py
-          
-      - name: Download model from ECR
-        env:
-          AWS_REGION: ${{ env.TESTING_REGION }}
-          STAGE: ${{ env.STAGE }}
-          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
-          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
-        run: |
-          # Asegurarse que el directorio /tmp existe y tenemos permisos
-          sudo mkdir -p /tmp
-          sudo chmod 777 /tmp
-          
-          # Ejecutar script de descarga del modelo
-          echo "Descargando modelo desde ECR..."
-          python scripts/download_model.py
-          
-          # Verificar que el modelo se descargó correctamente
+          echo "Descargando modelo desde S3 para tests..."
+          python scripts/download_model_from_s3.py
           if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
-            echo "Error: El modelo no se descargó correctamente"
+            echo "Error: El modelo no se descargó correctamente desde S3"
             exit 1
           fi
-          
-          echo "Modelo descargado exitosamente"
+          echo "Modelo descargado exitosamente desde S3"
           ls -l /tmp/densenet121_Opset17.onnx
-          
-          # Copiar el modelo a la carpeta de la función
-          cp /tmp/densenet121_Opset17.onnx densenet_function/
 
       - name: Run tests
-        env:
-          AWS_REGION: ${{ env.TESTING_REGION }}
-          STAGE: ${{ env.STAGE }}
-          TEST_DATA_BUCKET: ${{ env.TEST_DATA_BUCKET }}
         run: |
-          # Verificar que el modelo existe antes de las pruebas
           if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
             echo "Error: El modelo no existe en /tmp"
             ls -la /tmp
             exit 1
           fi
-          
           pytest tests/test_model.py -v
 
-  build-and-deploy-dev:
+  deploy-dev:
+    needs: [test-dev]
     if: github.ref == 'refs/heads/dev'
-    needs: [test]
     runs-on: ubuntu-latest
+    env:
+      STAGE: dev
+      MODELS_BUCKET: densenet-models-dev
+      STACK_NAME: densenet-fargate-dev
+      AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@v3
       
@@ -185,84 +124,235 @@ jobs:
         with:
           python-version: '3.9'
           
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install docker boto3 requests Pillow numpy onnxruntime
-
+      - name: Set up Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.TESTING_REGION }}
-          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: dev-deployment
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
+          role-session-name: deployment-session-dev
           role-duration-seconds: 3600
           role-skip-session-tagging: true
-
-      - name: Download model from ECR
-        env:
-          AWS_REGION: ${{ env.TESTING_REGION }}
-          STAGE: ${{ env.STAGE }}
-          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
-          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
+          
+      - name: Install dependencies
         run: |
-          # Asegurarse que el directorio /tmp existe y tenemos permisos
-          sudo mkdir -p /tmp
-          sudo chmod 777 /tmp
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install aws-cdk-lib constructs
+          npm install -g aws-cdk
           
-          # Ejecutar script de descarga del modelo
-          echo "Descargando modelo desde ECR..."
-          python scripts/download_model.py
+          # Instalar herramientas para testing del contenedor
+          sudo apt-get update && sudo apt-get install -y jq curl
           
-          # Verificar que el modelo se descargó correctamente
-          if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
-            echo "Error: El modelo no se descargó correctamente"
+          # Instalar herramientas para testing del contenedor
+          sudo apt-get update && sudo apt-get install -y jq curl
+
+      - name: Verify models bucket for deployment
+        run: |
+          echo "Verificando bucket de modelos para deployment..."
+          aws s3 ls s3://${{ env.MODELS_BUCKET }}/models/ || {
+            echo "❌ Error: El bucket de modelos no existe para deployment"
             exit 1
-          fi
+          }
+          echo "✅ Bucket de modelos verificado para deployment"
           
-          echo "Modelo descargado exitosamente"
-          ls -l /tmp/densenet121_Opset17.onnx
+      - name: Build and push Docker image
+        run: |
+          # Login to ECR
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
           
-          # Copiar el modelo a la carpeta de la función
-          cp /tmp/densenet121_Opset17.onnx densenet_function/
+          # Create ECR repository if it doesn't exist
+          aws ecr describe-repositories --repository-names app-${{ env.STAGE }} || \
+          aws ecr create-repository --repository-name app-${{ env.STAGE }}
+          
+          # Build Docker image (modelo se descarga desde S3 en runtime)
+          docker build -t app:latest \
+            --build-arg AWS_REGION=${{ env.AWS_REGION }} \
+            --build-arg STAGE=${{ env.STAGE }} \
+            --build-arg AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            --build-arg AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            --build-arg AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
+            .
+          
+          # Tag and push to ECR
+          docker tag app:latest ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
+          docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push Lambda image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.TESTING_IMAGE_REPOSITORY }}
-          IMAGE_TAG: latest
+      - name: Test Docker container locally before deploy
         run: |
-          cd densenet_function
-          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REPOSITORY:$IMAGE_TAG
+          echo "🧪 Probando contenedor Docker localmente..."
+          
+          # Ejecutar contenedor en background
+          echo "📦 Iniciando contenedor..."
+          docker run -d \
+            --name test-container-${{ env.STAGE }} \
+            -p 8080:80 \
+            -e STAGE=${{ env.STAGE }} \
+            -e AWS_REGION=${{ env.AWS_REGION }} \
+            -e AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            -e AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
+            app:latest
+          
+          # Esperar a que el contenedor inicie
+          echo "⏳ Esperando a que el contenedor inicie..."
+          sleep 30
+          
+          # Verificar que el contenedor está corriendo
+          echo "🔍 Estado del contenedor:"
+          docker ps -a --filter name=test-container-${{ env.STAGE }}
+          
+          # Obtener logs iniciales
+          echo "📄 Logs del contenedor (primeros 50 líneas):"
+          docker logs test-container-${{ env.STAGE }} --tail 50 || echo "No se pudieron obtener logs"
+          
+          # Función para probar endpoint
+          test_endpoint() {
+            local endpoint=$1
+            local description=$2
+            echo "🌐 Probando $description ($endpoint)..."
+            
+            if curl -f -s -m 10 "http://localhost:8080$endpoint"; then
+              echo "✅ $description: OK"
+              echo "📊 Response body:"
+              curl -s -m 10 "http://localhost:8080$endpoint" | jq '.' || curl -s -m 10 "http://localhost:8080$endpoint"
+              echo ""
+            else
+              echo "❌ $description: FAILED"
+              echo "📊 Attempting raw response:"
+              curl -v -m 10 "http://localhost:8080$endpoint" || echo "Curl failed completely"
+              echo ""
+            fi
+          }
+          
+          # Esperar un poco más para que la app esté completamente lista
+          echo "⏳ Esperando a que FastAPI esté listo..."
+          sleep 45
+          
+          # Probar diferentes endpoints
+          test_endpoint "/" "Endpoint raíz (health check del ALB)"
+          test_endpoint "/health" "Endpoint de health check"
+          test_endpoint "/health/basic" "Endpoint de health check básico"
+          test_endpoint "/debug" "Endpoint de debug"
+          
+          # Verificar si el proceso está corriendo dentro del contenedor
+          echo "🔍 Procesos corriendo en el contenedor:"
+          docker exec test-container-${{ env.STAGE }} ps aux || echo "No se pudieron obtener procesos"
+          
+          # Verificar puertos
+          echo "🔍 Puertos del contenedor:"
+          docker port test-container-${{ env.STAGE }} || echo "No se pudieron obtener puertos"
+          
+          # Logs finales más detallados
+          echo "📄 Logs completos del contenedor:"
+          docker logs test-container-${{ env.STAGE }} || echo "No se pudieron obtener logs completos"
+          
+          # Cleanup
+          echo "🧹 Limpiando contenedor de prueba..."
+          docker stop test-container-${{ env.STAGE }} || echo "Container ya parado"
+          docker rm test-container-${{ env.STAGE }} || echo "Container ya eliminado"
+          
+          echo "✅ Test de contenedor completado"
 
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-
-      - name: Deploy to dev
+      - name: Test Docker container locally before deploy
         run: |
-          sam deploy \
-            --stack-name ${TESTING_STACK_NAME} \
-            --template-file ${SAM_TEMPLATE} \
-            --capabilities CAPABILITY_IAM \
-            --region ${TESTING_REGION} \
-            --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
-            --no-fail-on-empty-changeset \
-            --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE} \
-            --parameter-overrides Stage=dev
+          echo "🧪 Probando contenedor Docker localmente..."
+          
+          # Ejecutar contenedor en background
+          echo "📦 Iniciando contenedor..."
+          docker run -d \
+            --name test-container-${{ env.STAGE }} \
+            -p 8080:80 \
+            -e STAGE=${{ env.STAGE }} \
+            -e AWS_REGION=${{ env.AWS_REGION }} \
+            -e AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            -e AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
+            app:latest
+          
+          # Esperar a que el contenedor inicie
+          echo "⏳ Esperando a que el contenedor inicie..."
+          sleep 30
+          
+          # Verificar que el contenedor está corriendo
+          echo "🔍 Estado del contenedor:"
+          docker ps -a --filter name=test-container-${{ env.STAGE }}
+          
+          # Obtener logs iniciales
+          echo "📄 Logs del contenedor (primeros 50 líneas):"
+          docker logs test-container-${{ env.STAGE }} --tail 50 || echo "No se pudieron obtener logs"
+          
+          # Función para probar endpoint
+          test_endpoint() {
+            local endpoint=$1
+            local description=$2
+            echo "🌐 Probando $description ($endpoint)..."
+            
+            if curl -f -s -m 10 "http://localhost:8080$endpoint"; then
+              echo "✅ $description: OK"
+              echo "📊 Response body:"
+              curl -s -m 10 "http://localhost:8080$endpoint" | jq '.' || curl -s -m 10 "http://localhost:8080$endpoint"
+              echo ""
+            else
+              echo "❌ $description: FAILED"
+              echo "📊 Attempting raw response:"
+              curl -v -m 10 "http://localhost:8080$endpoint" || echo "Curl failed completely"
+              echo ""
+            fi
+          }
+          
+          # Esperar un poco más para que la app esté completamente lista
+          echo "⏳ Esperando a que FastAPI esté listo..."
+          sleep 45
+          
+          # Probar diferentes endpoints
+          test_endpoint "/" "Endpoint raíz (health check del ALB)"
+          test_endpoint "/health" "Endpoint de health check"
+          test_endpoint "/health/basic" "Endpoint de health check básico"
+          test_endpoint "/debug" "Endpoint de debug"
+          
+          # Verificar si el proceso está corriendo dentro del contenedor
+          echo "🔍 Procesos corriendo en el contenedor:"
+          docker exec test-container-${{ env.STAGE }} ps aux || echo "No se pudieron obtener procesos"
+          
+          # Verificar puertos
+          echo "🔍 Puertos del contenedor:"
+          docker port test-container-${{ env.STAGE }} || echo "No se pudieron obtener puertos"
+          
+          # Logs finales más detallados
+          echo "📄 Logs completos del contenedor:"
+          docker logs test-container-${{ env.STAGE }} || echo "No se pudieron obtener logs completos"
+          
+          # Cleanup
+          echo "🧹 Limpiando contenedor de prueba..."
+          docker stop test-container-${{ env.STAGE }} || echo "Container ya parado"
+          docker rm test-container-${{ env.STAGE }} || echo "Container ya eliminado"
+          
+          echo "✅ Test de contenedor completado"
+          
+      - name: Deploy with CDK
+        run: |
+          cdk deploy --app="python3 ${PWD}/app.py" \
+            --require-approval=never \
+            -c stage=${{ env.STAGE }} \
+            -c region=${{ env.AWS_REGION }} \
+            ${{ env.STACK_NAME }}
 
-  build-and-deploy-prod:
+  # ========== PROD ENVIRONMENT ==========
+  test-prod:
     if: github.ref == 'refs/heads/prod'
-    needs: [test]
     runs-on: ubuntu-latest
-    environment: production  # Requiere aprobación manual
+    env:
+      STAGE: prod
+      TEST_DATA_BUCKET: densenet-test-data-prod
+      MODELS_BUCKET: densenet-models-prod
+      AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@v3
       
@@ -271,75 +361,235 @@ jobs:
         with:
           python-version: '3.9'
           
-      - name: Install dependencies
+      - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install docker boto3 requests Pillow numpy onnxruntime
-
+          pip install -r tests/requirements-test.txt
+          pip install boto3 requests Pillow numpy onnxruntime
+          
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.PROD_REGION }}
-          role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: prod-deployment
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
+          role-session-name: testing-session-prod
           role-duration-seconds: 3600
           role-skip-session-tagging: true
 
-      - name: Download model from ECR
-        env:
-          AWS_REGION: ${{ env.PROD_REGION }}
-          STAGE: ${{ env.STAGE }}
-          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
-          MODEL_REPOSITORY: ${{ env.MODEL_REPOSITORY }}
+      - name: Setup test data bucket
         run: |
-          # Asegurarse que el directorio /tmp existe y tenemos permisos
-          sudo mkdir -p /tmp
-          sudo chmod 777 /tmp
+          python -c "
+          import boto3
+          import time
+          s3 = boto3.client('s3')
+          bucket_name = '${{ env.TEST_DATA_BUCKET }}'
           
-          # Ejecutar script de descarga del modelo
-          echo "Descargando modelo desde ECR..."
-          python scripts/download_model.py
-          
-          # Verificar que el modelo se descargó correctamente
+          try:
+              s3.head_bucket(Bucket=bucket_name)
+              print(f'Bucket {bucket_name} ya existe')
+          except:
+              if '${{ env.AWS_REGION }}' == 'us-east-1':
+                  s3.create_bucket(Bucket=bucket_name)
+              else:
+                  s3.create_bucket(
+                      Bucket=bucket_name,
+                      CreateBucketConfiguration={'LocationConstraint': '${{ env.AWS_REGION }}'}
+                  )
+              print(f'Bucket {bucket_name} creado')
+              time.sleep(5)
+          "
+
+      - name: Verify models bucket exists
+        run: |
+          echo "Verificando que el bucket de modelos existe..."
+          aws s3 ls s3://${{ env.MODELS_BUCKET }}/models/ || {
+            echo "❌ Error: El bucket de modelos ${{ env.MODELS_BUCKET }} no existe o está vacío"
+            echo "Por favor, ejecuta el script setup-models-bucket.sh primero:"
+            echo "  ./setup-models-bucket.sh ${{ env.STAGE }} ${{ env.AWS_REGION }}"
+            exit 1
+          }
+          echo "✅ Bucket de modelos verificado"
+
+      - name: Generate and upload test data
+        run: |
+          python scripts/generate_test_data.py
+
+      - name: Download model from S3 for tests
+        run: |
+          echo "Descargando modelo desde S3 para tests..."
+          python scripts/download_model_from_s3.py
           if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
-            echo "Error: El modelo no se descargó correctamente"
+            echo "Error: El modelo no se descargó correctamente desde S3"
             exit 1
           fi
-          
-          echo "Modelo descargado exitosamente"
+          echo "Modelo descargado exitosamente desde S3"
           ls -l /tmp/densenet121_Opset17.onnx
-          
-          # Copiar el modelo a la carpeta de la función
-          cp /tmp/densenet121_Opset17.onnx densenet_function/
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push Lambda image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.PROD_IMAGE_REPOSITORY }}
-          IMAGE_TAG: latest
+      - name: Run tests
         run: |
-          cd densenet_function
-          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REPOSITORY:$IMAGE_TAG
+          if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
+            echo "Error: El modelo no existe en /tmp"
+            ls -la /tmp
+            exit 1
+          fi
+          pytest tests/test_model.py -v
 
-      - uses: aws-actions/setup-sam@v2
+  deploy-prod:
+    needs: [test-prod]
+    if: github.ref == 'refs/heads/prod'
+    runs-on: ubuntu-latest
+    env:
+      STAGE: prod
+      MODELS_BUCKET: densenet-models-prod
+      STACK_NAME: densenet-fargate-prod
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          use-installer: true
-
-      - name: Deploy to production
+          python-version: '3.9'
+          
+      - name: Set up Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
+          role-session-name: deployment-session-prod
+          role-duration-seconds: 3600
+          role-skip-session-tagging: true
+          
+      - name: Install dependencies
         run: |
-          sam deploy \
-            --stack-name ${PROD_STACK_NAME} \
-            --template-file ${SAM_TEMPLATE} \
-            --capabilities CAPABILITY_IAM \
-            --region ${PROD_REGION} \
-            --s3-bucket ${PROD_ARTIFACTS_BUCKET} \
-            --no-fail-on-empty-changeset \
-            --role-arn ${PROD_CLOUDFORMATION_EXECUTION_ROLE} \
-            --parameter-overrides Stage=prod
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install aws-cdk-lib constructs
+          npm install -g aws-cdk
+          
+          # Instalar herramientas para testing del contenedor
+          sudo apt-get update && sudo apt-get install -y jq curl
+
+      - name: Verify models bucket for deployment
+        run: |
+          echo "Verificando bucket de modelos para deployment..."
+          aws s3 ls s3://${{ env.MODELS_BUCKET }}/models/ || {
+            echo "❌ Error: El bucket de modelos no existe para deployment"
+            exit 1
+          }
+          echo "✅ Bucket de modelos verificado para deployment"
+          
+      - name: Build and push Docker image
+        run: |
+          # Login to ECR
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+          
+          # Create ECR repository if it doesn't exist
+          aws ecr describe-repositories --repository-names app-${{ env.STAGE }} || \
+          aws ecr create-repository --repository-name app-${{ env.STAGE }}
+          
+          # Build Docker image (modelo se descarga desde S3 en runtime)
+          docker build -t app:latest \
+            --build-arg AWS_REGION=${{ env.AWS_REGION }} \
+            --build-arg STAGE=${{ env.STAGE }} \
+            --build-arg AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            --build-arg AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            --build-arg AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
+            .
+          
+          # Tag and push to ECR
+          docker tag app:latest ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
+          docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
+
+      - name: Test Docker container locally before deploy
+        run: |
+          echo "🧪 Probando contenedor Docker localmente..."
+          
+          # Ejecutar contenedor en background
+          echo "📦 Iniciando contenedor..."
+          docker run -d \
+            --name test-container-${{ env.STAGE }} \
+            -p 8080:80 \
+            -e STAGE=${{ env.STAGE }} \
+            -e AWS_REGION=${{ env.AWS_REGION }} \
+            -e AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            -e AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
+            app:latest
+          
+          # Esperar a que el contenedor inicie
+          echo "⏳ Esperando a que el contenedor inicie..."
+          sleep 30
+          
+          # Verificar que el contenedor está corriendo
+          echo "🔍 Estado del contenedor:"
+          docker ps -a --filter name=test-container-${{ env.STAGE }}
+          
+          # Obtener logs iniciales
+          echo "📄 Logs del contenedor (primeros 50 líneas):"
+          docker logs test-container-${{ env.STAGE }} --tail 50 || echo "No se pudieron obtener logs"
+          
+          # Función para probar endpoint
+          test_endpoint() {
+            local endpoint=$1
+            local description=$2
+            echo "🌐 Probando $description ($endpoint)..."
+            
+            if curl -f -s -m 10 "http://localhost:8080$endpoint"; then
+              echo "✅ $description: OK"
+              echo "📊 Response body:"
+              curl -s -m 10 "http://localhost:8080$endpoint" | jq '.' || curl -s -m 10 "http://localhost:8080$endpoint"
+              echo ""
+            else
+              echo "❌ $description: FAILED"
+              echo "📊 Attempting raw response:"
+              curl -v -m 10 "http://localhost:8080$endpoint" || echo "Curl failed completely"
+              echo ""
+            fi
+          }
+          
+          # Esperar un poco más para que la app esté completamente lista
+          echo "⏳ Esperando a que FastAPI esté listo..."
+          sleep 45
+          
+          # Probar diferentes endpoints
+          test_endpoint "/" "Endpoint raíz (health check del ALB)"
+          test_endpoint "/health" "Endpoint de health check"
+          test_endpoint "/health/basic" "Endpoint de health check básico"
+          test_endpoint "/debug" "Endpoint de debug"
+          
+          # Verificar si el proceso está corriendo dentro del contenedor
+          echo "🔍 Procesos corriendo en el contenedor:"
+          docker exec test-container-${{ env.STAGE }} ps aux || echo "No se pudieron obtener procesos"
+          
+          # Verificar puertos
+          echo "🔍 Puertos del contenedor:"
+          docker port test-container-${{ env.STAGE }} || echo "No se pudieron obtener puertos"
+          
+          # Logs finales más detallados
+          echo "📄 Logs completos del contenedor:"
+          docker logs test-container-${{ env.STAGE }} || echo "No se pudieron obtener logs completos"
+          
+          # Cleanup
+          echo "🧹 Limpiando contenedor de prueba..."
+          docker stop test-container-${{ env.STAGE }} || echo "Container ya parado"
+          docker rm test-container-${{ env.STAGE }} || echo "Container ya eliminado"
+          
+          echo "✅ Test de contenedor completado"
+          
+      - name: Deploy with CDK
+        run: |
+          cdk deploy --app="python3 ${PWD}/app.py" \
+            --require-approval=never \
+            -c stage=${{ env.STAGE }} \
+            -c region=${{ env.AWS_REGION }} \
+            ${{ env.STACK_NAME }}

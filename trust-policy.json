@@ -1,0 +1,12 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "AWS": "arn:aws:iam::471112837636:user/aws-sam-cli-managed-personal-account-d-PipelineUser-0c4EBLF4Lx9H"
+        },
+        "Action": "sts:AssumeRole"
+      }
+    ]
+  }

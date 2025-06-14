@@ -15,7 +15,8 @@ import logging
 # Configuración
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 STAGE = os.environ.get('STAGE', 'dev')
-MODEL_BUCKET = os.environ.get('TEST_DATA_BUCKET', f'densenet-test-data-{STAGE}')
+TEST_DATA_BUCKET = os.environ.get('TEST_DATA_BUCKET', f'densenet-test-data-{STAGE}')
+MODELS_BUCKET = os.environ.get('MODELS_BUCKET', f'densenet-models-{STAGE}')
 MODEL_KEY = 'test_data/test_images.json'
 METRICS_THRESHOLD = {
     'accuracy': 0.25,
@@ -43,15 +44,54 @@ def wait_for_bucket(bucket_name, max_attempts=10, delay=5):
 def download_test_data():
     """Descargar datos de prueba desde S3"""
     # Esperar a que el bucket esté disponible
-    if not wait_for_bucket(MODEL_BUCKET):
-        raise Exception(f"El bucket {MODEL_BUCKET} no está disponible después de esperar")
+    if not wait_for_bucket(TEST_DATA_BUCKET):
+        raise Exception(f"El bucket {TEST_DATA_BUCKET} no está disponible después de esperar")
     
     s3 = boto3.client('s3', region_name=AWS_REGION)
     try:
-        response = s3.get_object(Bucket=MODEL_BUCKET, Key=MODEL_KEY)
+        response = s3.get_object(Bucket=TEST_DATA_BUCKET, Key=MODEL_KEY)
         return json.loads(response['Body'].read().decode('utf-8'))
     except Exception as e:
         print(f"Error descargando datos de prueba: {str(e)}")
+        raise
+
+def ensure_model_downloaded():
+    """Asegurar que el modelo esté descargado localmente"""
+    model_path = "/tmp/densenet121_Opset17.onnx"
+    
+    # Verificar si el modelo ya existe
+    if os.path.exists(model_path):
+        print(f"Modelo ya existe en: {model_path}")
+        return model_path
+    
+    # Importar y ejecutar el script de descarga
+    print("Descargando modelo desde S3...")
+    
+    # Configurar variables de entorno para el script
+    os.environ['STAGE'] = STAGE
+    os.environ['AWS_REGION'] = AWS_REGION
+    
+    try:
+        # Importar el módulo de descarga
+        import sys
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+        
+        from download_model_from_s3 import download_model_from_s3
+        
+        if download_model_from_s3():
+            if os.path.exists(model_path):
+                print(f"✅ Modelo descargado exitosamente: {model_path}")
+                return model_path
+            else:
+                raise Exception("El modelo no existe después de la descarga")
+        else:
+            raise Exception("Fallo en la descarga del modelo desde S3")
+            
+    except ImportError as e:
+        print(f"Error importando script de descarga: {str(e)}")
+        raise Exception("No se pudo importar el script de descarga del modelo")
+    except Exception as e:
+        print(f"Error descargando modelo: {str(e)}")
         raise
 
 def preprocess_image(image_bytes):
@@ -80,8 +120,54 @@ def preprocess_image(image_bytes):
     
     return img_array
 
+def test_s3_buckets_exist():
+    """Verificar que los buckets de S3 existen"""
+    s3 = boto3.client('s3', region_name=AWS_REGION)
+    
+    # Verificar bucket de test data
+    try:
+        s3.head_bucket(Bucket=TEST_DATA_BUCKET)
+        print(f"✅ Bucket de test data existe: {TEST_DATA_BUCKET}")
+    except Exception as e:
+        pytest.fail(f"Bucket de test data no existe: {TEST_DATA_BUCKET} - {str(e)}")
+    
+    # Verificar bucket de modelos
+    try:
+        s3.head_bucket(Bucket=MODELS_BUCKET)
+        print(f"✅ Bucket de modelos existe: {MODELS_BUCKET}")
+    except Exception as e:
+        pytest.fail(f"Bucket de modelos no existe: {MODELS_BUCKET} - {str(e)}")
+    
+    # Verificar que el modelo existe en S3
+    try:
+        s3.head_object(Bucket=MODELS_BUCKET, Key='models/densenet121_Opset17.onnx')
+        print(f"✅ Modelo existe en S3: s3://{MODELS_BUCKET}/models/densenet121_Opset17.onnx")
+    except Exception as e:
+        pytest.fail(f"Modelo no existe en S3: {str(e)}")
+
+def test_model_download():
+    """Probar descarga del modelo desde S3"""
+    model_path = ensure_model_downloaded()
+    
+    # Verificar que el archivo existe y tiene tamaño
+    assert os.path.exists(model_path), f"El modelo no existe en {model_path}"
+    
+    file_size = os.path.getsize(model_path)
+    assert file_size > 0, "El archivo del modelo está vacío"
+    
+    # Verificar que es un archivo ONNX válido
+    try:
+        session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+        input_meta = session.get_inputs()[0]
+        print(f"✅ Modelo ONNX válido cargado: {input_meta.name}, shape: {input_meta.shape}")
+    except Exception as e:
+        pytest.fail(f"Error cargando modelo ONNX: {str(e)}")
+
 def test_model_response():
     """Probar que el modelo responde con datos de entrada definidos"""
+    # Asegurar que el modelo esté descargado
+    model_path = ensure_model_downloaded()
+    
     # Descargar datos de prueba
     test_data = download_test_data()
     
@@ -95,10 +181,6 @@ def test_model_response():
     # Verificar tipo de datos
     logger.info(f"Tipo de datos de entrada: {input_data.dtype}")
     logger.info(f"Forma de datos de entrada: {input_data.shape}")
-    
-    # Cargar modelo
-    model_path = "/tmp/densenet121_Opset17.onnx"
-    assert os.path.exists(model_path), "El modelo no existe en /tmp/densenet121_Opset17.onnx"
     
     # Cargar modelo y verificar metadatos
     session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
@@ -122,12 +204,11 @@ def test_model_response():
 
 def test_model_metrics():
     """Probar que las métricas del modelo cumplen con los umbrales"""
+    # Asegurar que el modelo esté descargado
+    model_path = ensure_model_downloaded()
+    
     # Descargar datos de prueba
     test_data = download_test_data()
-    
-    # Cargar modelo
-    model_path = "/tmp/densenet121_Opset17.onnx"
-    assert os.path.exists(model_path), "El modelo no existe en /tmp/densenet121_Opset17.onnx"
     
     session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
     input_meta = session.get_inputs()[0]
@@ -190,4 +271,4 @@ def test_model_metrics():
     
     # Verificar umbrales
     assert accuracy >= METRICS_THRESHOLD['accuracy'], f"Accuracy {accuracy} below threshold {METRICS_THRESHOLD['accuracy']}"
-    assert avg_confidence >= METRICS_THRESHOLD['avg_confidence'], f"Average confidence {avg_confidence} below threshold {METRICS_THRESHOLD['avg_confidence']}" 
+    assert avg_confidence >= METRICS_THRESHOLD['avg_confidence'], f"Average confidence {avg_confidence} below threshold {METRICS_THRESHOLD['avg_confidence']}"
