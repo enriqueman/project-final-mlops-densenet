@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 # Crear instancia de FastAPI
 app = FastAPI(
-    title="AI Model Service",
+    title="AI Model Service PROD",
     description="Servicio de predicción usando modelo DenseNet121 prueba en ambiente productivo PROD",
     version="3.0.0",
     docs_url="/docs",
