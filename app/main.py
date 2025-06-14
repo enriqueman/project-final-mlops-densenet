@@ -150,7 +150,7 @@ async def startup_event():
 @app.get("/", tags=["health"], summary="Root endpoint")
 async def root():
     """Endpoint raíz para health check del ALB"""
-    return {"mensaje": "API  - Bienvenido"}
+    return {"mensaje": "API  - Bienvenido al sistema de predicción de animales"}
 
 @app.get("/health", tags=["health"], summary="Health check principal")
 async def health_check():
