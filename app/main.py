@@ -54,7 +54,9 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="AI Model Service",
     description="Servicio de predicción usando modelo DenseNet121",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # Variables globales para el estado del modelo
@@ -141,20 +143,24 @@ async def startup_event():
         logger.error(f"Stack trace: {traceback.format_exc()}")
         # No hacer raise para permitir que la app responda al health check
 
-@app.get("/")
+# ============================================================================
+# SECCIÓN: HEALTH CHECK
+# ============================================================================
+
+@app.get("/", tags=["health"], summary="Root endpoint")
 async def root():
     """Endpoint raíz para health check del ALB"""
     return {"mensaje": "API  - Bienvenido"}
 
-@app.get("/health")
+@app.get("/health", tags=["health"], summary="Health check principal")
 async def health_check():
     """Health check principal"""
     # Simplemente redirigir al endpoint raíz
     return await root()
 
-@app.get("/health/basic")
+@app.get("/health/basic", tags=["health"], summary="Health check básico")
 async def basic_health_check():
-    """Health check básico"""
+    """Health check básico - solo verifica que el servicio esté corriendo"""
     return {
         "status": "healthy",
         "message": "Servicio FastAPI funcionando",
@@ -164,31 +170,72 @@ async def basic_health_check():
         "model_load_error": model_load_error
     }
 
-@app.get("/debug")
-async def debug_info():
-    """Información de debug"""
-    return {
-        "app_status": "running",
-        "python_path": os.getcwd(),
-        "environment_variables": {
-            "STAGE": os.getenv("STAGE"),
-            "AWS_REGION": os.getenv("AWS_REGION"), 
-            "MODEL_PATH": os.getenv("MODEL_PATH"),
-        },
-        "file_system": {
-            "cwd": os.getcwd(),
-            "exists_code_app": os.path.exists("/code/app"),
-            "exists_code_app_model": os.path.exists("/code/app/model"),
-            "exists_tmp": os.path.exists("/tmp"),
-        },
-        "uptime": time.time() - startup_time,
-        "model_service": model_service is not None,
-        "model_loading": model_loading,
-        "model_load_error": model_load_error
-    }
+@app.get("/health/detailed", tags=["health"], summary="Health check detallado")
+async def detailed_health_check():
+    """Health check detallado con múltiples verificaciones"""
+    try:
+        if model_service is None:
+            return {
+                "status": "unhealthy",
+                "message": "Modelo no inicializado",
+                "checks": {
+                    "model_service": False,
+                    "simple_check": False,
+                    "inference_check": False
+                }
+            }
+        
+        checks = {}
+        
+        # Check 1: Servicio básico
+        checks["model_service"] = True
+        
+        # Check 2: Verificación simple
+        try:
+            checks["simple_check"] = model_service.simple_health_check()
+        except Exception as e:
+            logger.error(f"Simple check falló: {e}")
+            checks["simple_check"] = False
+        
+        # Check 3: Verificación de inferencia
+        try:
+            checks["inference_check"] = model_service.is_healthy()
+        except Exception as e:
+            logger.error(f"Inference check falló: {e}")
+            checks["inference_check"] = False
+        
+        # Determinar estado general
+        if all(checks.values()):
+            status = "healthy"
+            message = "Todos los checks pasaron"
+        elif checks.get("simple_check", False):
+            status = "degraded"
+            message = "Modelo cargado pero problemas en inferencia"
+        else:
+            status = "unhealthy"
+            message = "Problemas críticos detectados"
+        
+        return {
+            "status": status,
+            "message": message,
+            "checks": checks,
+            "model_info": model_service.get_model_info() if model_service else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error en detailed health check: {e}")
+        return {
+            "status": "unhealthy",
+            "message": f"Error en health check: {str(e)}",
+            "checks": {}
+        }
 
-# Solo añadir endpoints de predicción si tenemos ModelService disponible
-@app.post("/predict")
+# ============================================================================
+# SECCIÓN: PREDICCIONES
+# ============================================================================
+
+@app.post("/predict", tags=["predict"], summary="Realizar predicción", 
+          description="Sube una imagen y obtén predicciones del modelo DenseNet121")
 async def predict(file: UploadFile = File(...)):
     """Endpoint para hacer predicciones"""
     try:
@@ -264,75 +311,128 @@ async def predict(file: UploadFile = File(...)):
         logger.error(f"Error inesperado en predict: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
-@app.get("/model/info")
+@app.get("/model/info", tags=["predict"], summary="Información del modelo")
 async def model_info():
-    """Información del modelo"""
+    """Información del modelo cargado"""
     if model_service is None:
         raise HTTPException(status_code=503, detail="Modelo no disponible")
     
     return model_service.get_model_info()
 
-@app.get("/health/detailed")
-async def detailed_health_check():
-    """Health check detallado con múltiples verificaciones"""
+# SECCIÓN: LOGS DE PREDICCIONES
+@app.get("/logs/predictions", tags=["predict"], summary="Ver logs de predicciones")
+async def get_prediction_logs():
+    """Obtener contenido del archivo de logs de predicciones"""
+    if not prediction_logger:
+        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
+    
+    content = prediction_logger.get_logs_content()
+    if content is None:
+        raise HTTPException(status_code=500, detail="Error obteniendo logs")
+    
+    return {
+        "stage": os.getenv('STAGE', 'dev'),
+        "content": content,
+        "stats": prediction_logger.get_logs_stats()
+    }
+
+@app.get("/logs/predictions/download", tags=["predict"], summary="Descargar logs de predicciones")
+async def download_prediction_logs():
+    """Descargar archivo de logs de predicciones"""
+    if not prediction_logger:
+        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
+    
+    file_bytes = prediction_logger.download_logs_file()
+    if file_bytes is None:
+        raise HTTPException(status_code=500, detail="Error descargando logs")
+    
+    stage = os.getenv('STAGE', 'dev')
+    filename = f"predicciones_{stage}.txt"
+    
+    from fastapi.responses import Response
+    return Response(
+        content=file_bytes,
+        media_type='text/plain',
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Type": "text/plain; charset=utf-8"
+        }
+    )
+
+@app.get("/logs/predictions/stats", tags=["predict"], summary="Estadísticas de logs")
+async def get_prediction_logs_stats():
+    """Obtener estadísticas del archivo de logs"""
+    if not prediction_logger:
+        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
+    
+    return prediction_logger.get_logs_stats()
+
+@app.delete("/logs/predictions", tags=["predict"], summary="Limpiar logs (solo dev)")
+async def clear_prediction_logs():
+    """Limpiar archivo de logs (solo para desarrollo/testing)"""
+    stage = os.getenv('STAGE', 'dev')
+    
+    # Solo permitir en desarrollo
+    if stage != 'dev':
+        raise HTTPException(
+            status_code=403, 
+            detail="Operación solo permitida en entorno de desarrollo"
+        )
+    
+    if not prediction_logger:
+        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
+    
     try:
-        if model_service is None:
-            return {
-                "status": "unhealthy",
-                "message": "Modelo no inicializado",
-                "checks": {
-                    "model_service": False,
-                    "simple_check": False,
-                    "inference_check": False
-                }
-            }
+        # Recrear archivo con solo header
+        from datetime import datetime
+        header = f"# Predicciones para {stage.upper()} - Reiniciado el {datetime.now().isoformat()}\n"
+        header += "# Formato: timestamp|filename|top_prediction|confidence|processing_time|all_predictions\n\n"
         
-        checks = {}
-        
-        # Check 1: Servicio básico
-        checks["model_service"] = True
-        
-        # Check 2: Verificación simple
-        try:
-            checks["simple_check"] = model_service.simple_health_check()
-        except Exception as e:
-            logger.error(f"Simple check falló: {e}")
-            checks["simple_check"] = False
-        
-        # Check 3: Verificación de inferencia
-        try:
-            checks["inference_check"] = model_service.is_healthy()
-        except Exception as e:
-            logger.error(f"Inference check falló: {e}")
-            checks["inference_check"] = False
-        
-        # Determinar estado general
-        if all(checks.values()):
-            status = "healthy"
-            message = "Todos los checks pasaron"
-        elif checks.get("simple_check", False):
-            status = "degraded"
-            message = "Modelo cargado pero problemas en inferencia"
-        else:
-            status = "unhealthy"
-            message = "Problemas críticos detectados"
+        prediction_logger.s3_client.put_object(
+            Bucket=prediction_logger.bucket_name,
+            Key=prediction_logger.file_key,
+            Body=header.encode('utf-8'),
+            ContentType='text/plain'
+        )
         
         return {
-            "status": status,
-            "message": message,
-            "checks": checks,
-            "model_info": model_service.get_model_info() if model_service else None
+            "message": "Logs limpiados exitosamente",
+            "stage": stage,
+            "timestamp": datetime.now().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"Error en detailed health check: {e}")
-        return {
-            "status": "unhealthy",
-            "message": f"Error en health check: {str(e)}",
-            "checks": {}
-        }
+        logger.error(f"Error limpiando logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error limpiando logs: {str(e)}")
 
-@app.get("/debug/test-preprocessing")
+# ============================================================================
+# SECCIÓN: TESTING Y DEBUG
+# ============================================================================
+
+@app.get("/debug", tags=["test"], summary="Información de debug")
+async def debug_info():
+    """Información de debug del sistema"""
+    return {
+        "app_status": "running",
+        "python_path": os.getcwd(),
+        "environment_variables": {
+            "STAGE": os.getenv("STAGE"),
+            "AWS_REGION": os.getenv("AWS_REGION"), 
+            "MODEL_PATH": os.getenv("MODEL_PATH"),
+        },
+        "file_system": {
+            "cwd": os.getcwd(),
+            "exists_code_app": os.path.exists("/code/app"),
+            "exists_code_app_model": os.path.exists("/code/app/model"),
+            "exists_tmp": os.path.exists("/tmp"),
+        },
+        "uptime": time.time() - startup_time,
+        "model_service": model_service is not None,
+        "model_loading": model_loading,
+        "model_load_error": model_load_error
+    }
+
+@app.get("/debug/test-preprocessing", tags=["test"], summary="Test de preprocesamiento")
 async def debug_test_preprocessing():
     """Endpoint para probar el preprocesamiento paso a paso"""
     try:
@@ -387,94 +487,7 @@ async def debug_test_preprocessing():
         logger.error(f"Error en test de preprocesamiento: {e}")
         return {"error": f"Error general: {str(e)}"}
 
-# NUEVOS ENDPOINTS PARA GESTIÓN DE LOGS DE PREDICCIONES
-
-@app.get("/logs/predictions")
-async def get_prediction_logs():
-    """Obtener contenido del archivo de logs de predicciones"""
-    if not prediction_logger:
-        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
-    
-    content = prediction_logger.get_logs_content()
-    if content is None:
-        raise HTTPException(status_code=500, detail="Error obteniendo logs")
-    
-    return {
-        "stage": os.getenv('STAGE', 'dev'),
-        "content": content,
-        "stats": prediction_logger.get_logs_stats()
-    }
-
-@app.get("/logs/predictions/download")
-async def download_prediction_logs():
-    """Descargar archivo de logs de predicciones"""
-    if not prediction_logger:
-        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
-    
-    file_bytes = prediction_logger.download_logs_file()
-    if file_bytes is None:
-        raise HTTPException(status_code=500, detail="Error descargando logs")
-    
-    stage = os.getenv('STAGE', 'dev')
-    filename = f"predicciones_{stage}.txt"
-    
-    from fastapi.responses import Response
-    return Response(
-        content=file_bytes,
-        media_type='text/plain',
-        headers={
-            "Content-Disposition": f"attachment; filename={filename}",
-            "Content-Type": "text/plain; charset=utf-8"
-        }
-    )
-
-@app.get("/logs/predictions/stats")
-async def get_prediction_logs_stats():
-    """Obtener estadísticas del archivo de logs"""
-    if not prediction_logger:
-        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
-    
-    return prediction_logger.get_logs_stats()
-
-@app.delete("/logs/predictions")
-async def clear_prediction_logs():
-    """Limpiar archivo de logs (solo para desarrollo/testing)"""
-    stage = os.getenv('STAGE', 'dev')
-    
-    # Solo permitir en desarrollo
-    if stage != 'dev':
-        raise HTTPException(
-            status_code=403, 
-            detail="Operación solo permitida en entorno de desarrollo"
-        )
-    
-    if not prediction_logger:
-        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
-    
-    try:
-        # Recrear archivo con solo header
-        from datetime import datetime
-        header = f"# Predicciones para {stage.upper()} - Reiniciado el {datetime.now().isoformat()}\n"
-        header += "# Formato: timestamp|filename|top_prediction|confidence|processing_time|all_predictions\n\n"
-        
-        prediction_logger.s3_client.put_object(
-            Bucket=prediction_logger.bucket_name,
-            Key=prediction_logger.file_key,
-            Body=header.encode('utf-8'),
-            ContentType='text/plain'
-        )
-        
-        return {
-            "message": "Logs limpiados exitosamente",
-            "stage": stage,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error limpiando logs: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error limpiando logs: {str(e)}")
-
-@app.get("/debug/predict-test")
+@app.get("/debug/predict-test", tags=["test"], summary="Test de predicción")
 async def debug_predict_test():
     """Endpoint para debuggear predicciones con imagen de prueba"""
     try:
@@ -545,7 +558,7 @@ async def debug_predict_test():
         logger.error(f"Error general en debug predict: {e}", exc_info=True)
         return {"error": f"Error general: {str(e)}"}
 
-@app.get("/debug/health")
+@app.get("/debug/health", tags=["test"], summary="Debug de health check")
 async def debug_health():
     """Endpoint de debug para el health check"""
     try:
