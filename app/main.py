@@ -12,11 +12,13 @@ import traceback
 try:
     from model_service import ModelService
     from schemas import PredictionResponse, HealthResponse
+    from prediction_logger import PredictionLogger
 except ImportError:
     # Fallback para imports relativos si es necesario
     try:
         from .model_service import ModelService
         from .schemas import PredictionResponse, HealthResponse
+        from .prediction_logger import PredictionLogger
     except ImportError:
         # Último fallback - crear clases básicas inline
         from pydantic import BaseModel
@@ -32,6 +34,17 @@ except ImportError:
             predictions: List[str]
             confidence_scores: List[float]
             processing_time: float
+            
+        # PredictionLogger dummy si no se puede importar
+        class PredictionLogger:
+            def log_prediction(self, *args, **kwargs):
+                return False
+            def get_logs_content(self):
+                return "# Logging no disponible\n"
+            def download_logs_file(self):
+                return b"# Logging no disponible\n"
+            def get_logs_stats(self):
+                return {"error": "Logging no disponible"}
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +62,14 @@ model_service = None
 model_loading = True
 model_load_error = None
 startup_time = time.time()
+
+# Inicializar logger de predicciones
+try:
+    prediction_logger = PredictionLogger()
+    logger.info("PredictionLogger inicializado correctamente")
+except Exception as e:
+    logger.error(f"Error inicializando PredictionLogger: {str(e)}")
+    prediction_logger = None
 
 def get_model_path():
     """Determinar la ruta correcta del modelo según el entorno"""
@@ -212,6 +233,24 @@ async def predict(file: UploadFile = File(...)):
                 detail=f"Error en predicción: {str(pred_error)}"
             )
         
+        # NUEVO: Registrar predicción en S3
+        if prediction_logger:
+            try:
+                success = prediction_logger.log_prediction(
+                    filename=file.filename or "unknown",
+                    predictions=prediction["predictions"],
+                    confidence_scores=prediction["confidence_scores"],
+                    processing_time=prediction["processing_time"]
+                )
+                if success:
+                    logger.info("Predicción registrada en S3 exitosamente")
+                else:
+                    logger.warning("No se pudo registrar predicción en S3")
+            except Exception as log_error:
+                logger.error(f"Error registrando predicción en S3: {str(log_error)}")
+        else:
+            logger.warning("PredictionLogger no disponible")
+        
         return PredictionResponse(
             filename=file.filename,
             predictions=prediction["predictions"],
@@ -347,6 +386,93 @@ async def debug_test_preprocessing():
     except Exception as e:
         logger.error(f"Error en test de preprocesamiento: {e}")
         return {"error": f"Error general: {str(e)}"}
+
+# NUEVOS ENDPOINTS PARA GESTIÓN DE LOGS DE PREDICCIONES
+
+@app.get("/logs/predictions")
+async def get_prediction_logs():
+    """Obtener contenido del archivo de logs de predicciones"""
+    if not prediction_logger:
+        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
+    
+    content = prediction_logger.get_logs_content()
+    if content is None:
+        raise HTTPException(status_code=500, detail="Error obteniendo logs")
+    
+    return {
+        "stage": os.getenv('STAGE', 'dev'),
+        "content": content,
+        "stats": prediction_logger.get_logs_stats()
+    }
+
+@app.get("/logs/predictions/download")
+async def download_prediction_logs():
+    """Descargar archivo de logs de predicciones"""
+    if not prediction_logger:
+        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
+    
+    file_bytes = prediction_logger.download_logs_file()
+    if file_bytes is None:
+        raise HTTPException(status_code=500, detail="Error descargando logs")
+    
+    stage = os.getenv('STAGE', 'dev')
+    filename = f"predicciones_{stage}.txt"
+    
+    from fastapi.responses import Response
+    return Response(
+        content=file_bytes,
+        media_type='text/plain',
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Type": "text/plain; charset=utf-8"
+        }
+    )
+
+@app.get("/logs/predictions/stats")
+async def get_prediction_logs_stats():
+    """Obtener estadísticas del archivo de logs"""
+    if not prediction_logger:
+        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
+    
+    return prediction_logger.get_logs_stats()
+
+@app.delete("/logs/predictions")
+async def clear_prediction_logs():
+    """Limpiar archivo de logs (solo para desarrollo/testing)"""
+    stage = os.getenv('STAGE', 'dev')
+    
+    # Solo permitir en desarrollo
+    if stage != 'dev':
+        raise HTTPException(
+            status_code=403, 
+            detail="Operación solo permitida en entorno de desarrollo"
+        )
+    
+    if not prediction_logger:
+        raise HTTPException(status_code=503, detail="Servicio de logging no disponible")
+    
+    try:
+        # Recrear archivo con solo header
+        from datetime import datetime
+        header = f"# Predicciones para {stage.upper()} - Reiniciado el {datetime.now().isoformat()}\n"
+        header += "# Formato: timestamp|filename|top_prediction|confidence|processing_time|all_predictions\n\n"
+        
+        prediction_logger.s3_client.put_object(
+            Bucket=prediction_logger.bucket_name,
+            Key=prediction_logger.file_key,
+            Body=header.encode('utf-8'),
+            ContentType='text/plain'
+        )
+        
+        return {
+            "message": "Logs limpiados exitosamente",
+            "stage": stage,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error limpiando logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error limpiando logs: {str(e)}")
 
 @app.get("/debug/predict-test")
 async def debug_predict_test():
