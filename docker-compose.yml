@@ -1,12 +1,35 @@
 version: '3.8'
+
 services:
-  web:
-    build: .
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        AWS_REGION: ${AWS_REGION:-us-east-1}
+        STAGE: ${STAGE:-dev}
+        AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+        AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+        AWS_ACCOUNT_ID: ${AWS_ACCOUNT_ID}
     ports:
-     - "8000:80"
-    volumes:
-     - .:/app
+      - "8000:80"
     environment:
-      - AWS_ACCESS_KEY_ID_DOCKER=${AWS_ACCESS_KEY_ID_DOCKER}
-      - AWS_SECRET_ACCESS_KEY_DOCKER=${AWS_SECRET_ACCESS_KEY_DOCKER}
-      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - STAGE=${STAGE:-dev}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
+    volumes:
+      # Montar credenciales AWS si existen
+      - ~/.aws:/root/.aws:ro
+      # Volumen para el modelo (para desarrollo)
+      - model_cache:/code/app/model
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  model_cache:

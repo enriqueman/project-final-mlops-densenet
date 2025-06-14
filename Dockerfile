@@ -1,52 +1,56 @@
-FROM python:3.9
+# Dockerfile modificado para obtener modelo desde S3
+FROM python:3.9-slim
 
-# Install required packages
-RUN apt-get update && apt-get install -y \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /code
-
-# Copy requirements first for better caching
-COPY ./requirements.txt /code/requirements.txt
-RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
-
-# Install additional dependencies needed for model download
-RUN pip install boto3
-
-# Copy application code
-COPY ./app /code/app
-COPY ./scripts/download_model.py /code/download_model.py
-
-# Create model directory
-RUN mkdir -p /code/app/model
-
-# Set environment variables
-ARG AWS_REGION
-ARG STAGE
-ARG MODEL_REPOSITORY
+# Argumentos de construcción
+ARG AWS_REGION=us-east-1
+ARG STAGE=dev
 ARG AWS_ACCESS_KEY_ID
 ARG AWS_SECRET_ACCESS_KEY
 ARG AWS_ACCOUNT_ID
 
-ENV AWS_DEFAULT_REGION=${AWS_REGION}
+# Variables de entorno
+ENV AWS_REGION=${AWS_REGION}
 ENV STAGE=${STAGE}
-ENV MODEL_REPOSITORY=${MODEL_REPOSITORY}
-ENV MODEL_PATH=/code/app/model/densenet121_Opset17.onnx
 ENV AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 ENV AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 ENV AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
 
-# Create startup script that downloads model and starts app
-RUN echo '#!/bin/bash\n\
-set -e\n\
-echo "=== DESCARGANDO MODELO AL INICIO ==="\n\
-python /code/download_model.py\n\
-if [ ! -f "/code/app/model/densenet121_Opset17.onnx" ]; then\n\
-    echo "Error: Modelo no descargado correctamente"\n\
-    exit 1\n\
-fi\n\
-echo "=== INICIANDO APLICACIÓN ==="\n\
-exec uvicorn app.app:app --host 0.0.0.0 --port 80' > /code/start.sh && chmod +x /code/start.sh
+# Instalar dependencias del sistema
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Run the startup script
-CMD ["/code/start.sh"]
+# Instalar AWS CLI
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf awscliv2.zip aws/
+
+# Crear directorio de trabajo
+WORKDIR /code
+
+# Copiar archivos de dependencias
+COPY requirements.txt .
+
+# Instalar dependencias de Python
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Crear directorio para el modelo
+RUN mkdir -p /code/app/model
+
+# Copiar código de la aplicación
+COPY app/ ./app/
+COPY scripts/download_model_from_s3.py ./scripts/
+
+# Hacer ejecutable el script de descarga
+RUN chmod +x ./scripts/download_model_from_s3.py
+
+# Script de inicialización que descarga el modelo y luego inicia la app
+COPY docker-entrypoint.sh .
+RUN chmod +x docker-entrypoint.sh
+
+# Exponer puerto
+EXPOSE 80
+
+# Usar el script de entrada
+ENTRYPOINT ["./docker-entrypoint.sh"]

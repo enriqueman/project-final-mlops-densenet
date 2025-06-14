@@ -2,15 +2,23 @@ uvicorn[standard]==0.24.0
 onnxruntime==1.15.1
 pillow==10.1.0
 numpy==1.24.4
-python-multipart==0.0.7
 requests==2.31.0
 
 
 aws-cdk-lib==2.166.0
 constructs>=10.0.0,<11.0.0
-fastapi[standard]>=0.113.0,<0.114.0
-pydantic>=2.7.0,<3.0.0
 pytest==8.3.2
 
 boto3==1.35.68
 botocore==1.35.68
+
+
+fastapi==0.104.1
+pydantic==2.5.0
+python-multipart==0.0.6
+pillow==10.1.0
+numpy==1.24.4
+opencv-python-headless==4.8.1.78
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+aiofiles==23.2.1

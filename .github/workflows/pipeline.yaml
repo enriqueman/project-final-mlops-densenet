@@ -22,7 +22,7 @@ jobs:
     env:
       STAGE: dev
       TEST_DATA_BUCKET: densenet-test-data-dev
-      MODEL_REPOSITORY: densenet121-model-dev
+      MODELS_BUCKET: densenet-models-dev
       AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@v3
@@ -36,7 +36,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r tests/requirements-test.txt
-          pip install docker boto3 requests Pillow numpy onnxruntime
+          pip install boto3 requests Pillow numpy onnxruntime
           
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -72,21 +72,30 @@ jobs:
               time.sleep(5)
           "
 
+      - name: Verify models bucket exists
+        run: |
+          echo "Verificando que el bucket de modelos existe..."
+          aws s3 ls s3://${{ env.MODELS_BUCKET }}/models/ || {
+            echo "❌ Error: El bucket de modelos ${{ env.MODELS_BUCKET }} no existe o está vacío"
+            echo "Por favor, ejecuta el script setup-models-bucket.sh primero:"
+            echo "  ./setup-models-bucket.sh ${{ env.STAGE }} ${{ env.AWS_REGION }}"
+            exit 1
+          }
+          echo "✅ Bucket de modelos verificado"
+
       - name: Generate and upload test data
         run: |
           python scripts/generate_test_data.py
 
-      - name: Download model from ECR for tests
+      - name: Download model from S3 for tests
         run: |
-          sudo mkdir -p /tmp
-          sudo chmod 777 /tmp
-          echo "Descargando modelo desde ECR para tests..."
-          python scripts/download_model.py
+          echo "Descargando modelo desde S3 para tests..."
+          python scripts/download_model_from_s3.py
           if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
-            echo "Error: El modelo no se descargó correctamente"
+            echo "Error: El modelo no se descargó correctamente desde S3"
             exit 1
           fi
-          echo "Modelo descargado exitosamente para tests"
+          echo "Modelo descargado exitosamente desde S3"
           ls -l /tmp/densenet121_Opset17.onnx
 
       - name: Run tests
@@ -104,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       STAGE: dev
-      MODEL_REPOSITORY: densenet121-model-dev
+      MODELS_BUCKET: densenet-models-dev
       STACK_NAME: densenet-fargate-dev
       AWS_REGION: us-east-1
     steps:
@@ -137,6 +146,15 @@ jobs:
           pip install -r requirements.txt
           pip install aws-cdk-lib constructs
           npm install -g aws-cdk
+
+      - name: Verify models bucket for deployment
+        run: |
+          echo "Verificando bucket de modelos para deployment..."
+          aws s3 ls s3://${{ env.MODELS_BUCKET }}/models/ || {
+            echo "❌ Error: El bucket de modelos no existe para deployment"
+            exit 1
+          }
+          echo "✅ Bucket de modelos verificado para deployment"
           
       - name: Build and push Docker image
         run: |
@@ -147,11 +165,10 @@ jobs:
           aws ecr describe-repositories --repository-names app-${{ env.STAGE }} || \
           aws ecr create-repository --repository-name app-${{ env.STAGE }}
           
-          # Build Docker image (modelo se descarga en runtime, no en build time)
+          # Build Docker image (modelo se descarga desde S3 en runtime)
           docker build -t app:latest \
             --build-arg AWS_REGION=${{ env.AWS_REGION }} \
             --build-arg STAGE=${{ env.STAGE }} \
-            --build-arg MODEL_REPOSITORY=${{ env.MODEL_REPOSITORY }} \
             --build-arg AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
             --build-arg AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
             --build-arg AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
@@ -176,7 +193,7 @@ jobs:
     env:
       STAGE: prod
       TEST_DATA_BUCKET: densenet-test-data-prod
-      MODEL_REPOSITORY: densenet121-model-prod
+      MODELS_BUCKET: densenet-models-prod
       AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@v3
@@ -190,7 +207,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r tests/requirements-test.txt
-          pip install docker boto3 requests Pillow numpy onnxruntime
+          pip install boto3 requests Pillow numpy onnxruntime
           
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -226,21 +243,30 @@ jobs:
               time.sleep(5)
           "
 
+      - name: Verify models bucket exists
+        run: |
+          echo "Verificando que el bucket de modelos existe..."
+          aws s3 ls s3://${{ env.MODELS_BUCKET }}/models/ || {
+            echo "❌ Error: El bucket de modelos ${{ env.MODELS_BUCKET }} no existe o está vacío"
+            echo "Por favor, ejecuta el script setup-models-bucket.sh primero:"
+            echo "  ./setup-models-bucket.sh ${{ env.STAGE }} ${{ env.AWS_REGION }}"
+            exit 1
+          }
+          echo "✅ Bucket de modelos verificado"
+
       - name: Generate and upload test data
         run: |
           python scripts/generate_test_data.py
 
-      - name: Download model from ECR for tests
+      - name: Download model from S3 for tests
         run: |
-          sudo mkdir -p /tmp
-          sudo chmod 777 /tmp
-          echo "Descargando modelo desde ECR para tests..."
-          python scripts/download_model.py
+          echo "Descargando modelo desde S3 para tests..."
+          python scripts/download_model_from_s3.py
           if [ ! -f "/tmp/densenet121_Opset17.onnx" ]; then
-            echo "Error: El modelo no se descargó correctamente"
+            echo "Error: El modelo no se descargó correctamente desde S3"
             exit 1
           fi
-          echo "Modelo descargado exitosamente para tests"
+          echo "Modelo descargado exitosamente desde S3"
           ls -l /tmp/densenet121_Opset17.onnx
 
       - name: Run tests
@@ -258,7 +284,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       STAGE: prod
-      MODEL_REPOSITORY: densenet121-model-prod
+      MODELS_BUCKET: densenet-models-prod
       STACK_NAME: densenet-fargate-prod
       AWS_REGION: us-east-1
     steps:
@@ -291,6 +317,15 @@ jobs:
           pip install -r requirements.txt
           pip install aws-cdk-lib constructs
           npm install -g aws-cdk
+
+      - name: Verify models bucket for deployment
+        run: |
+          echo "Verificando bucket de modelos para deployment..."
+          aws s3 ls s3://${{ env.MODELS_BUCKET }}/models/ || {
+            echo "❌ Error: El bucket de modelos no existe para deployment"
+            exit 1
+          }
+          echo "✅ Bucket de modelos verificado para deployment"
           
       - name: Build and push Docker image
         run: |
@@ -301,11 +336,10 @@ jobs:
           aws ecr describe-repositories --repository-names app-${{ env.STAGE }} || \
           aws ecr create-repository --repository-name app-${{ env.STAGE }}
           
-          # Build Docker image (modelo se descarga en runtime, no en build time)
+          # Build Docker image (modelo se descarga desde S3 en runtime)
           docker build -t app:latest \
             --build-arg AWS_REGION=${{ env.AWS_REGION }} \
             --build-arg STAGE=${{ env.STAGE }} \
-            --build-arg MODEL_REPOSITORY=${{ env.MODEL_REPOSITORY }} \
             --build-arg AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
             --build-arg AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
             --build-arg AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
