@@ -89,14 +89,14 @@ class CdkFargateDeployStack(Stack):
             public_load_balancer=True
         )
         
-        # Configure Health Check
+        # Configure Health Check - Optimizado para ML workload
         service.target_group.configure_health_check(
             port="traffic-port",
             path="/health",
-            interval=Duration.seconds(30),
-            timeout=Duration.seconds(5),
-            healthy_threshold_count=5,
-            unhealthy_threshold_count=2,
+            interval=Duration.seconds(60),        # Aumentado para dar más tiempo
+            timeout=Duration.seconds(15),         # Aumentado para ML processing
+            healthy_threshold_count=3,            # Reducido para ser menos estricto
+            unhealthy_threshold_count=3,          # Aumentado para evitar false negatives
             healthy_http_codes="200"
         )
         
