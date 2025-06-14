@@ -81,6 +81,42 @@ async def startup_event():
         # No hacer raise aquí para permitir que la app inicie y responda al health check
         # raise
 
+@app.get("/")
+async def root():
+    """Endpoint raíz para health check del ALB"""
+    global model_service, model_loading, model_load_error
+    
+    current_time = time.time()
+    
+    # Health check muy básico en la raíz
+    if model_loading:
+        return {
+            "status": "loading",
+            "message": "Servicio iniciando...",
+            "timestamp": current_time
+        }
+    
+    if model_load_error:
+        return {
+            "status": "error", 
+            "message": "Error en inicialización",
+            "timestamp": current_time
+        }
+    
+    if model_service is None:
+        return {
+            "status": "initializing",
+            "message": "Servicio inicializando...",
+            "timestamp": current_time
+        }
+    
+    return {
+        "status": "healthy",
+        "message": "Servicio funcionando",
+        "timestamp": current_time,
+        "model_loaded": True
+    }
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Endpoint de salud del servicio - Compatible con ALB Health Check"""

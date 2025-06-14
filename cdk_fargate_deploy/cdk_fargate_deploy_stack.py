@@ -89,15 +89,15 @@ class CdkFargateDeployStack(Stack):
             public_load_balancer=True
         )
         
-        # Configure Health Check - Optimizado para ML workload
+        # Configure Health Check - Volver a la raíz como funcionaba antes
         service.target_group.configure_health_check(
             port="traffic-port",
-            path="/health",
-            interval=Duration.seconds(60),        # Aumentado para dar más tiempo
-            timeout=Duration.seconds(15),         # Aumentado para ML processing
-            healthy_threshold_count=3,            # Reducido para ser menos estricto
-            unhealthy_threshold_count=3,          # Aumentado para evitar false negatives
-            healthy_http_codes="200"
+            path="/",                           # ✅ Cambiar de vuelta a "/"
+            interval=Duration.seconds(60),      # Más tiempo para carga del modelo
+            timeout=Duration.seconds(15),       # Timeout más generoso
+            healthy_threshold_count=2,          # Menos estricto
+            unhealthy_threshold_count=5,        # Más tolerante a fallos
+            healthy_http_codes="200,201,202,204"
         )
         
         # VPC Link
