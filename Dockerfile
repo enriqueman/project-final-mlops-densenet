@@ -15,9 +15,10 @@ ENV AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 ENV AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 ENV AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}
 
-# Instalar dependencias del sistema
+# Instalar dependencias del sistema (incluyendo unzip)
 RUN apt-get update && apt-get install -y \
     curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Instalar AWS CLI
