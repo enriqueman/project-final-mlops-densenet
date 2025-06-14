@@ -22,6 +22,10 @@ class CdkFargateDeployStack(Stack):
         region = self.node.try_get_context('region') or 'us-east-1'
         account_id = Stack.of(self).account
         
+        # Generar un deployment ID único para forzar nuevas task definitions
+        import time
+        deployment_id = str(int(time.time()))
+        
         # Models bucket name based on stage
         models_bucket_name = f"densenet-models-{stage}"
         
@@ -104,7 +108,8 @@ class CdkFargateDeployStack(Stack):
                     "STAGE": stage,
                     "AWS_REGION": region,
                     "MODELS_BUCKET": models_bucket_name,
-                    "LOGS_BUCKET": logs_bucket_name
+                    "LOGS_BUCKET": logs_bucket_name,
+                    "DEPLOYMENT_ID": deployment_id  # Forzar nueva task definition
                 }
             ),
             memory_limit_mib=3072,  # Increased for ML workload
