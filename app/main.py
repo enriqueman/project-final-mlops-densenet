@@ -84,7 +84,9 @@ async def startup_event():
 @app.get("/")
 async def root():
     """Endpoint raíz para health check del ALB"""
-    global model_service, model_loading, model_load_error
+    return {"mensaje": "API  - Bienvenido"}
+
+    '''global model_service, model_loading, model_load_error
     
     current_time = time.time()
     
@@ -115,7 +117,7 @@ async def root():
         "message": "Servicio funcionando",
         "timestamp": current_time,
         "model_loaded": True
-    }
+    }'''
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():

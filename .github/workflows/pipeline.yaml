@@ -146,6 +146,12 @@ jobs:
           pip install -r requirements.txt
           pip install aws-cdk-lib constructs
           npm install -g aws-cdk
+          
+          # Instalar herramientas para testing del contenedor
+          sudo apt-get update && sudo apt-get install -y jq curl
+          
+          # Instalar herramientas para testing del contenedor
+          sudo apt-get update && sudo apt-get install -y jq curl
 
       - name: Verify models bucket for deployment
         run: |
@@ -177,6 +183,158 @@ jobs:
           # Tag and push to ECR
           docker tag app:latest ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
           docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
+
+      - name: Test Docker container locally before deploy
+        run: |
+          echo "🧪 Probando contenedor Docker localmente..."
+          
+          # Ejecutar contenedor en background
+          echo "📦 Iniciando contenedor..."
+          docker run -d \
+            --name test-container-${{ env.STAGE }} \
+            -p 8080:80 \
+            -e STAGE=${{ env.STAGE }} \
+            -e AWS_REGION=${{ env.AWS_REGION }} \
+            -e AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            -e AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
+            app:latest
+          
+          # Esperar a que el contenedor inicie
+          echo "⏳ Esperando a que el contenedor inicie..."
+          sleep 30
+          
+          # Verificar que el contenedor está corriendo
+          echo "🔍 Estado del contenedor:"
+          docker ps -a --filter name=test-container-${{ env.STAGE }}
+          
+          # Obtener logs iniciales
+          echo "📄 Logs del contenedor (primeros 50 líneas):"
+          docker logs test-container-${{ env.STAGE }} --tail 50 || echo "No se pudieron obtener logs"
+          
+          # Función para probar endpoint
+          test_endpoint() {
+            local endpoint=$1
+            local description=$2
+            echo "🌐 Probando $description ($endpoint)..."
+            
+            if curl -f -s -m 10 "http://localhost:8080$endpoint"; then
+              echo "✅ $description: OK"
+              echo "📊 Response body:"
+              curl -s -m 10 "http://localhost:8080$endpoint" | jq '.' || curl -s -m 10 "http://localhost:8080$endpoint"
+              echo ""
+            else
+              echo "❌ $description: FAILED"
+              echo "📊 Attempting raw response:"
+              curl -v -m 10 "http://localhost:8080$endpoint" || echo "Curl failed completely"
+              echo ""
+            fi
+          }
+          
+          # Esperar un poco más para que la app esté completamente lista
+          echo "⏳ Esperando a que FastAPI esté listo..."
+          sleep 45
+          
+          # Probar diferentes endpoints
+          test_endpoint "/" "Endpoint raíz (health check del ALB)"
+          test_endpoint "/health" "Endpoint de health check"
+          test_endpoint "/health/basic" "Endpoint de health check básico"
+          test_endpoint "/debug" "Endpoint de debug"
+          
+          # Verificar si el proceso está corriendo dentro del contenedor
+          echo "🔍 Procesos corriendo en el contenedor:"
+          docker exec test-container-${{ env.STAGE }} ps aux || echo "No se pudieron obtener procesos"
+          
+          # Verificar puertos
+          echo "🔍 Puertos del contenedor:"
+          docker port test-container-${{ env.STAGE }} || echo "No se pudieron obtener puertos"
+          
+          # Logs finales más detallados
+          echo "📄 Logs completos del contenedor:"
+          docker logs test-container-${{ env.STAGE }} || echo "No se pudieron obtener logs completos"
+          
+          # Cleanup
+          echo "🧹 Limpiando contenedor de prueba..."
+          docker stop test-container-${{ env.STAGE }} || echo "Container ya parado"
+          docker rm test-container-${{ env.STAGE }} || echo "Container ya eliminado"
+          
+          echo "✅ Test de contenedor completado"
+
+      - name: Test Docker container locally before deploy
+        run: |
+          echo "🧪 Probando contenedor Docker localmente..."
+          
+          # Ejecutar contenedor en background
+          echo "📦 Iniciando contenedor..."
+          docker run -d \
+            --name test-container-${{ env.STAGE }} \
+            -p 8080:80 \
+            -e STAGE=${{ env.STAGE }} \
+            -e AWS_REGION=${{ env.AWS_REGION }} \
+            -e AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            -e AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
+            app:latest
+          
+          # Esperar a que el contenedor inicie
+          echo "⏳ Esperando a que el contenedor inicie..."
+          sleep 30
+          
+          # Verificar que el contenedor está corriendo
+          echo "🔍 Estado del contenedor:"
+          docker ps -a --filter name=test-container-${{ env.STAGE }}
+          
+          # Obtener logs iniciales
+          echo "📄 Logs del contenedor (primeros 50 líneas):"
+          docker logs test-container-${{ env.STAGE }} --tail 50 || echo "No se pudieron obtener logs"
+          
+          # Función para probar endpoint
+          test_endpoint() {
+            local endpoint=$1
+            local description=$2
+            echo "🌐 Probando $description ($endpoint)..."
+            
+            if curl -f -s -m 10 "http://localhost:8080$endpoint"; then
+              echo "✅ $description: OK"
+              echo "📊 Response body:"
+              curl -s -m 10 "http://localhost:8080$endpoint" | jq '.' || curl -s -m 10 "http://localhost:8080$endpoint"
+              echo ""
+            else
+              echo "❌ $description: FAILED"
+              echo "📊 Attempting raw response:"
+              curl -v -m 10 "http://localhost:8080$endpoint" || echo "Curl failed completely"
+              echo ""
+            fi
+          }
+          
+          # Esperar un poco más para que la app esté completamente lista
+          echo "⏳ Esperando a que FastAPI esté listo..."
+          sleep 45
+          
+          # Probar diferentes endpoints
+          test_endpoint "/" "Endpoint raíz (health check del ALB)"
+          test_endpoint "/health" "Endpoint de health check"
+          test_endpoint "/health/basic" "Endpoint de health check básico"
+          test_endpoint "/debug" "Endpoint de debug"
+          
+          # Verificar si el proceso está corriendo dentro del contenedor
+          echo "🔍 Procesos corriendo en el contenedor:"
+          docker exec test-container-${{ env.STAGE }} ps aux || echo "No se pudieron obtener procesos"
+          
+          # Verificar puertos
+          echo "🔍 Puertos del contenedor:"
+          docker port test-container-${{ env.STAGE }} || echo "No se pudieron obtener puertos"
+          
+          # Logs finales más detallados
+          echo "📄 Logs completos del contenedor:"
+          docker logs test-container-${{ env.STAGE }} || echo "No se pudieron obtener logs completos"
+          
+          # Cleanup
+          echo "🧹 Limpiando contenedor de prueba..."
+          docker stop test-container-${{ env.STAGE }} || echo "Container ya parado"
+          docker rm test-container-${{ env.STAGE }} || echo "Container ya eliminado"
+          
+          echo "✅ Test de contenedor completado"
           
       - name: Deploy with CDK
         run: |
@@ -317,6 +475,9 @@ jobs:
           pip install -r requirements.txt
           pip install aws-cdk-lib constructs
           npm install -g aws-cdk
+          
+          # Instalar herramientas para testing del contenedor
+          sudo apt-get update && sudo apt-get install -y jq curl
 
       - name: Verify models bucket for deployment
         run: |
@@ -348,6 +509,82 @@ jobs:
           # Tag and push to ECR
           docker tag app:latest ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
           docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/app-${{ env.STAGE }}:latest
+
+      - name: Test Docker container locally before deploy
+        run: |
+          echo "🧪 Probando contenedor Docker localmente..."
+          
+          # Ejecutar contenedor en background
+          echo "📦 Iniciando contenedor..."
+          docker run -d \
+            --name test-container-${{ env.STAGE }} \
+            -p 8080:80 \
+            -e STAGE=${{ env.STAGE }} \
+            -e AWS_REGION=${{ env.AWS_REGION }} \
+            -e AWS_ACCESS_KEY_ID=${{ env.PIPELINE_USER_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }} \
+            -e AWS_ACCOUNT_ID=${{ env.AWS_ACCOUNT_ID }} \
+            app:latest
+          
+          # Esperar a que el contenedor inicie
+          echo "⏳ Esperando a que el contenedor inicie..."
+          sleep 30
+          
+          # Verificar que el contenedor está corriendo
+          echo "🔍 Estado del contenedor:"
+          docker ps -a --filter name=test-container-${{ env.STAGE }}
+          
+          # Obtener logs iniciales
+          echo "📄 Logs del contenedor (primeros 50 líneas):"
+          docker logs test-container-${{ env.STAGE }} --tail 50 || echo "No se pudieron obtener logs"
+          
+          # Función para probar endpoint
+          test_endpoint() {
+            local endpoint=$1
+            local description=$2
+            echo "🌐 Probando $description ($endpoint)..."
+            
+            if curl -f -s -m 10 "http://localhost:8080$endpoint"; then
+              echo "✅ $description: OK"
+              echo "📊 Response body:"
+              curl -s -m 10 "http://localhost:8080$endpoint" | jq '.' || curl -s -m 10 "http://localhost:8080$endpoint"
+              echo ""
+            else
+              echo "❌ $description: FAILED"
+              echo "📊 Attempting raw response:"
+              curl -v -m 10 "http://localhost:8080$endpoint" || echo "Curl failed completely"
+              echo ""
+            fi
+          }
+          
+          # Esperar un poco más para que la app esté completamente lista
+          echo "⏳ Esperando a que FastAPI esté listo..."
+          sleep 45
+          
+          # Probar diferentes endpoints
+          test_endpoint "/" "Endpoint raíz (health check del ALB)"
+          test_endpoint "/health" "Endpoint de health check"
+          test_endpoint "/health/basic" "Endpoint de health check básico"
+          test_endpoint "/debug" "Endpoint de debug"
+          
+          # Verificar si el proceso está corriendo dentro del contenedor
+          echo "🔍 Procesos corriendo en el contenedor:"
+          docker exec test-container-${{ env.STAGE }} ps aux || echo "No se pudieron obtener procesos"
+          
+          # Verificar puertos
+          echo "🔍 Puertos del contenedor:"
+          docker port test-container-${{ env.STAGE }} || echo "No se pudieron obtener puertos"
+          
+          # Logs finales más detallados
+          echo "📄 Logs completos del contenedor:"
+          docker logs test-container-${{ env.STAGE }} || echo "No se pudieron obtener logs completos"
+          
+          # Cleanup
+          echo "🧹 Limpiando contenedor de prueba..."
+          docker stop test-container-${{ env.STAGE }} || echo "Container ya parado"
+          docker rm test-container-${{ env.STAGE }} || echo "Container ya eliminado"
+          
+          echo "✅ Test de contenedor completado"
           
       - name: Deploy with CDK
         run: |
