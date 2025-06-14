@@ -25,6 +25,9 @@ class CdkFargateDeployStack(Stack):
         # Models bucket name based on stage
         models_bucket_name = f"densenet-models-{stage}"
         
+        # Logs bucket name (same for all stages)
+        logs_bucket_name = "predics"
+        
         # Create VPC
         vpc = ec2.Vpc(self, f"VpcFargate-{stage}", max_azs=2)
         
@@ -51,6 +54,24 @@ class CdkFargateDeployStack(Stack):
                 resources=[
                     f"arn:aws:s3:::{models_bucket_name}",
                     f"arn:aws:s3:::{models_bucket_name}/*"
+                ]
+            )
+        )
+        
+        # Add S3 permissions for logs bucket (predictions logging)
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:ListBucket",
+                    "s3:HeadObject",
+                    "s3:CreateBucket"  # Para crear bucket si no existe
+                ],
+                resources=[
+                    f"arn:aws:s3:::{logs_bucket_name}",
+                    f"arn:aws:s3:::{logs_bucket_name}/*"
                 ]
             )
         )
@@ -82,14 +103,15 @@ class CdkFargateDeployStack(Stack):
                 environment={
                     "STAGE": stage,
                     "AWS_REGION": region,
-                    "MODELS_BUCKET": models_bucket_name
+                    "MODELS_BUCKET": models_bucket_name,
+                    "LOGS_BUCKET": logs_bucket_name
                 }
             ),
             memory_limit_mib=3072,  # Increased for ML workload
             public_load_balancer=True
         )
         
-        # Configure Health Check - Volver a la raíz como funcionaba antes
+        # Configure Health Check - Volver a la raíz para simplificar
         service.target_group.configure_health_check(
             port="traffic-port",
             path="/",                           # ✅ Cambiar de vuelta a "/"
@@ -157,7 +179,7 @@ class CdkFargateDeployStack(Stack):
         
         CfnOutput(
             self,
-            "ModelsBucket",
-            description=f"S3 bucket for models - {stage} environment",
-            value=models_bucket_name
+            "LogsBucket",
+            description=f"S3 bucket for prediction logs - {stage} environment",
+            value=logs_bucket_name
         )
